@@ -226,6 +226,43 @@ export interface InteractionEvidence {
   topThreads: number;
 }
 
+// ── Intro Request Types ──
+
+export const INTRO_REQUEST_STATUSES = [
+  "pending",
+  "accepted",
+  "declined",
+  "cancelled",
+] as const;
+export type IntroRequestStatus = (typeof INTRO_REQUEST_STATUSES)[number];
+
+export interface ApiIntroRequest {
+  id: number;
+  requesterUserId: number;
+  requesterPersonId: number;
+  targetPersonId: number;
+  intermediaryPersonId: number;
+  status: IntroRequestStatus;
+  requestNote: string | null;
+  responseNote: string | null;
+  createdAt: string;
+  respondedAt: string | null;
+  requesterPerson?: ApiPerson;
+  targetPerson?: ApiPerson;
+  intermediaryPerson?: ApiPerson;
+}
+
+export interface CreateIntroRequestPayload {
+  targetPersonId: number;
+  intermediaryPersonId: number;
+  requestNote?: string;
+}
+
+export interface RespondIntroRequestPayload {
+  action: "accept" | "decline";
+  responseNote?: string;
+}
+
 // ── API Error ──
 
 export interface ApiError {

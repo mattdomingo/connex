@@ -138,3 +138,25 @@ export const hideContact = (personId: number) =>
 
 export const unhideContact = (personId: number) =>
   request<{ success: boolean }>(`/me/connections/${personId}/hide`, { method: "DELETE" });
+
+// Intro Requests
+import type {
+  ApiIntroRequest,
+  CreateIntroRequestPayload,
+  RespondIntroRequestPayload,
+} from "@connex/shared";
+
+export const createIntroRequest = (data: CreateIntroRequestPayload) =>
+  request<ApiIntroRequest>("/intro-requests", { method: "POST", body: JSON.stringify(data) });
+
+export const getSentIntroRequests = () =>
+  request<ApiIntroRequest[]>("/intro-requests/sent");
+
+export const getInboxIntroRequests = () =>
+  request<ApiIntroRequest[]>("/intro-requests/inbox");
+
+export const respondToIntroRequest = (id: number, data: RespondIntroRequestPayload) =>
+  request<ApiIntroRequest>(`/intro-requests/${id}/respond`, { method: "POST", body: JSON.stringify(data) });
+
+export const cancelIntroRequest = (id: number) =>
+  request<ApiIntroRequest>(`/intro-requests/${id}/cancel`, { method: "POST" });

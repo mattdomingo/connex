@@ -18,6 +18,7 @@ import graphRoutes from "./routes/graph.js";
 import integrationRoutes from "./routes/integrations.js";
 import gmailRoutes from "./routes/gmail.js";
 import meConnectionRoutes from "./routes/me-connections.js";
+import introRequestRoutes from "./routes/intro-requests.js";
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -38,6 +39,7 @@ app.use("/api/graph", graphRoutes);
 app.use("/api/integrations", integrationRoutes);
 app.use("/api/gmail", gmailRoutes);
 app.use("/api/me", meConnectionRoutes);
+app.use("/api/intro-requests", introRequestRoutes);
 
 // Health check
 app.get("/api/health", (_req, res) => {

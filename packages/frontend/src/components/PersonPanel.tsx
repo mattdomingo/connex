@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import type { GraphNode, ApiPerson } from "@connex/shared";
 import * as api from "../api/client.js";
 
@@ -10,6 +11,7 @@ interface Props {
 }
 
 export function PersonPanel({ node, isMe, onFindPath, onRecenter }: Props) {
+  const navigate = useNavigate();
   const [person, setPerson] = useState<ApiPerson | null>(null);
 
   useEffect(() => {
@@ -69,6 +71,14 @@ export function PersonPanel({ node, isMe, onFindPath, onRecenter }: Props) {
         {!isMe && (
           <button className="btn btn-sm" onClick={() => onRecenter(node.id)}>
             Re-center
+          </button>
+        )}
+        {!isMe && node.degree > 1 && (
+          <button
+            className="btn btn-sm"
+            onClick={() => navigate(`/introductions?targetId=${node.id}`)}
+          >
+            Request Intro
           </button>
         )}
       </div>
