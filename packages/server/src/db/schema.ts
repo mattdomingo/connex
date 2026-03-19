@@ -296,6 +296,66 @@ export const relationshipEdges = sqliteTable(
   }),
 );
 
+// ---------------------------------------------------------------------------
+// intro_requests — warm intro asks routed through an intermediary.
+//
+// status lifecycle:
+//   pending   → accepted | declined | cancelled
+//   (all three terminals are final; declined/cancelled permit a retry)
+//
+// Uniqueness: at most one pending-or-accepted request per (requester, target,
+// intermediary) triplet. Declined/cancelled rows do not block re-creation.
+// ---------------------------------------------------------------------------
+
+export const introRequests = sqliteTable(
+  "intro_requests",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    requesterUserId: integer("requester_user_id")
+      .notNull()
+      .references(() => users.id),
+    requesterPersonId: integer("requester_person_id")
+      .notNull()
+      .references(() => people.id),
+    targetPersonId: integer("target_person_id")
+      .notNull()
+      .references(() => people.id),
+    intermediaryPersonId: integer("intermediary_person_id")
+      .notNull()
+      .references(() => people.id),
+    status: text("status", {
+      enum: ["pending", "accepted", "declined", "cancelled"],
+    })
+      .notNull()
+      .default("pending"),
+    requestNote: text("request_note"),
+    responseNote: text("response_note"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+    respondedAt: text("responded_at"),
+  },
+  (t) => ({
+    inboxIdx: index("intro_requests_inbox_idx").on(
+      t.intermediaryPersonId,
+      t.status,
+    ),
+    requesterIdx: index("intro_requests_requester_idx").on(
+      t.requesterUserId,
+      t.createdAt,
+    ),
+    liveUq: uniqueIndex("intro_requests_live_uq")
+      .on(t.requesterPersonId, t.targetPersonId, t.intermediaryPersonId)
+      .where(sql`status IN ('pending','accepted')`),
+    distinctPartiesCheck: check(
+      "intro_requests_distinct_parties",
+      sql`${t.requesterPersonId} != ${t.targetPersonId}
+          AND ${t.requesterPersonId} != ${t.intermediaryPersonId}
+          AND ${t.targetPersonId} != ${t.intermediaryPersonId}`,
+    ),
+  }),
+);
+
 // --- Inferred types ---------------------------------------------------------
 
 export type PersonRow = typeof people.$inferSelect;
@@ -306,3 +366,4 @@ export type GmailAccountRow = typeof gmailAccounts.$inferSelect;
 export type EmailMetadataRow = typeof emailMetadata.$inferSelect;
 export type IdentityRecordRow = typeof identityRecords.$inferSelect;
 export type RelationshipEdgeRow = typeof relationshipEdges.$inferSelect;
+export type IntroRequestRow = typeof introRequests.$inferSelect;

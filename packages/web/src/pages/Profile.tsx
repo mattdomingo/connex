@@ -1,5 +1,6 @@
-import { FormEvent, useEffect, useState } from "react";
-import { api } from "../api/client";
+import { FormEvent, useEffect, useRef, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { api, GmailStatus, GmailSyncResult } from "../api/client";
 import { useAuth } from "../api/auth-context";
 
 export default function ProfilePage() {
@@ -80,6 +81,130 @@ export default function ProfilePage() {
           {saved && <span style={{ marginLeft: 12, color: "var(--ok)" }}>Saved</span>}
         </form>
       </div>
+
+      <GmailPanel />
+    </div>
+  );
+}
+
+function GmailPanel() {
+  const nav = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const gmailParam = params.get("gmail");
+
+  const [status, setStatus] = useState<GmailStatus | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSync, setLastSync] = useState<GmailSyncResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const handled = useRef(false);
+
+  async function loadStatus() {
+    try {
+      setStatus(await api.getGmailStatus());
+    } catch {
+      setStatus({ connected: false });
+    }
+  }
+
+  useEffect(() => {
+    loadStatus();
+  }, []);
+
+  // Handle ?gmail=connect → kick off OAuth redirect.
+  // Handle ?gmail=connected → auto-sync once, then go to /graph.
+  useEffect(() => {
+    if (handled.current) return;
+    if (gmailParam === "connect") {
+      handled.current = true;
+      api.connectGmail();
+      return;
+    }
+    if (gmailParam === "connected") {
+      handled.current = true;
+      (async () => {
+        setSyncing(true);
+        setErr(null);
+        try {
+          const res = await api.syncGmail();
+          setLastSync(res);
+          nav("/graph", { replace: true });
+        } catch (e) {
+          setErr((e as Error).message);
+          setParams({}, { replace: true });
+          await loadStatus();
+        } finally {
+          setSyncing(false);
+        }
+      })();
+    }
+  }, [gmailParam, nav, setParams]);
+
+  async function syncNow() {
+    setSyncing(true);
+    setErr(null);
+    try {
+      const res = await api.syncGmail();
+      setLastSync(res);
+      await loadStatus();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  async function revoke() {
+    if (!confirm("Disconnect Gmail and delete all Gmail-derived data?")) return;
+    await api.revokeGmail();
+    setLastSync(null);
+    await loadStatus();
+  }
+
+  return (
+    <div className="panel" style={{ marginTop: 24 }}>
+      <h2>Gmail</h2>
+      <p className="hint">
+        Connex reads only From / To / Cc / Date headers — never subjects or
+        bodies — to infer who you know.
+      </p>
+
+      {gmailParam === "connect" && (
+        <p className="hint">Redirecting to Google…</p>
+      )}
+
+      {!status ? (
+        <p className="hint">Loading…</p>
+      ) : !status.connected ? (
+        <button onClick={() => api.connectGmail()} disabled={syncing}>
+          Connect Gmail
+        </button>
+      ) : (
+        <>
+          <p className="hint">
+            Connected: <strong>{status.gmailAddress}</strong>
+            {status.lastSyncedAt && (
+              <> · Last sync {new Date(status.lastSyncedAt).toLocaleString()}</>
+            )}
+          </p>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={syncNow} disabled={syncing}>
+              {syncing ? "Syncing…" : "Sync now"}
+            </button>
+            <button className="secondary" onClick={revoke} disabled={syncing}>
+              Revoke
+            </button>
+          </div>
+          {lastSync && (
+            <p className="hint" style={{ marginTop: 8 }}>
+              Fetched {lastSync.fetched} · {lastSync.newMetadata} new ·
+              {" "}{lastSync.relationshipEdges} ties ·
+              {" "}{lastSync.connectionsBridged} bridged
+            </p>
+          )}
+        </>
+      )}
+
+      {err && <div className="error" style={{ marginTop: 8 }}>{err}</div>}
     </div>
   );
 }

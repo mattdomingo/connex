@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import type {
   GraphNeighborhood,
   GraphNode,
@@ -48,6 +49,7 @@ interface FGLink {
 
 export default function GraphPage() {
   const { user } = useAuth();
+  const nav = useNavigate();
   const [degree, setDegree] = useState(2);
   const [data, setData] = useState<GraphNeighborhood | null>(null);
   const [selected, setSelected] = useState<GraphNode | null>(null);
@@ -304,12 +306,21 @@ export default function GraphPage() {
                     </div>
                   )}
                   {selected.degree > 0 && (
-                    <button
-                      style={{ marginTop: 12 }}
-                      onClick={() => showPath(selected.personId)}
-                    >
-                      Show shortest path
-                    </button>
+                    <div style={{ marginTop: 12, display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <button onClick={() => showPath(selected.personId)}>
+                        Show shortest path
+                      </button>
+                      {selected.degree > 1 && (
+                        <button
+                          className="secondary"
+                          onClick={() =>
+                            nav(`/introductions?target=${selected.personId}`)
+                          }
+                        >
+                          Request intro
+                        </button>
+                      )}
+                    </div>
                   )}
                 </>
               )}

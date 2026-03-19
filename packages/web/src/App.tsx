@@ -7,6 +7,7 @@ import ProfilePage from "./pages/Profile";
 import InvitesPage from "./pages/Invites";
 import PeoplePage from "./pages/People";
 import ConnectionsPage from "./pages/Connections";
+import IntroductionsPage from "./pages/Introductions";
 
 function Shell() {
   const { user, loading, logout } = useAuth();
@@ -35,6 +36,9 @@ function Shell() {
         <NavLink to="/connections" className={({ isActive }) => (isActive ? "active" : "")}>
           Connections
         </NavLink>
+        <NavLink to="/introductions" className={({ isActive }) => (isActive ? "active" : "")}>
+          Introductions
+        </NavLink>
         <NavLink to="/people" className={({ isActive }) => (isActive ? "active" : "")}>
           People
         </NavLink>
@@ -61,6 +65,7 @@ function Shell() {
         <Routes>
           <Route path="/graph" element={<GraphPage />} />
           <Route path="/connections" element={<ConnectionsPage />} />
+          <Route path="/introductions" element={<IntroductionsPage />} />
           <Route path="/people" element={<PeoplePage />} />
           <Route path="/invites" element={<InvitesPage />} />
           <Route path="/profile" element={<ProfilePage />} />

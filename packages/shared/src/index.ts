@@ -171,6 +171,47 @@ export interface SearchResultItem {
   locked: boolean;
 }
 
+// --- Warm intro requests ----------------------------------------------------
+
+export type IntroRequestStatus =
+  | "pending"
+  | "accepted"
+  | "declined"
+  | "cancelled";
+
+export interface PersonSummary {
+  id: number;
+  name: string;
+  isRegistered: boolean;
+}
+
+export interface IntroRequest {
+  id: number;
+  requesterUserId: number;
+  requesterPersonId: number;
+  targetPersonId: number;
+  intermediaryPersonId: number;
+  status: IntroRequestStatus;
+  requestNote: string | null;
+  responseNote: string | null;
+  createdAt: string;
+  respondedAt: string | null;
+  requester: PersonSummary;
+  target: PersonSummary;
+  intermediary: PersonSummary;
+}
+
+export interface CreateIntroRequest {
+  targetPersonId: number;
+  intermediaryPersonId: number;
+  note?: string;
+}
+
+export interface RespondIntroRequest {
+  action: "accept" | "decline";
+  note?: string;
+}
+
 // --- API response envelope --------------------------------------------------
 
 export interface ApiError {

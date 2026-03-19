@@ -1,10 +1,11 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../api/auth-context";
 
 export default function RegisterPage() {
   const { refresh } = useAuth();
+  const nav = useNavigate();
   const [params] = useSearchParams();
   const [inviteCode, setInviteCode] = useState(params.get("invite") ?? "");
   const [name, setName] = useState("");
@@ -42,9 +43,17 @@ export default function RegisterPage() {
     try {
       await api.register({ inviteCode, name, email, password });
       await refresh();
+      // Kick off Gmail onboarding if not already linked.
+      try {
+        const gs = await api.getGmailStatus();
+        nav(gs.connected ? "/graph" : "/profile?gmail=connect", {
+          replace: true,
+        });
+      } catch {
+        nav("/profile?gmail=connect", { replace: true });
+      }
     } catch (e) {
       setErr((e as Error).message);
-    } finally {
       setBusy(false);
     }
   }

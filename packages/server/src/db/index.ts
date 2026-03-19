@@ -144,6 +144,34 @@ export function applySchema(sqlite: Database.Database): void {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS relationship_edges_user_identity_uq
       ON relationship_edges(user_id, identity_id);
+
+    -- --- Warm intro requests ------------------------------------------------
+
+    CREATE TABLE IF NOT EXISTS intro_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      requester_user_id INTEGER NOT NULL REFERENCES users(id),
+      requester_person_id INTEGER NOT NULL REFERENCES people(id),
+      target_person_id INTEGER NOT NULL REFERENCES people(id),
+      intermediary_person_id INTEGER NOT NULL REFERENCES people(id),
+      status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','accepted','declined','cancelled')),
+      request_note TEXT,
+      response_note TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      responded_at TEXT,
+      CHECK (
+        requester_person_id != target_person_id
+        AND requester_person_id != intermediary_person_id
+        AND target_person_id != intermediary_person_id
+      )
+    );
+    CREATE INDEX IF NOT EXISTS intro_requests_inbox_idx
+      ON intro_requests(intermediary_person_id, status);
+    CREATE INDEX IF NOT EXISTS intro_requests_requester_idx
+      ON intro_requests(requester_user_id, created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS intro_requests_live_uq
+      ON intro_requests(requester_person_id, target_person_id, intermediary_person_id)
+      WHERE status IN ('pending','accepted');
   `);
 
   // --- Lightweight migrations for pre-existing databases --------------------

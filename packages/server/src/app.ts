@@ -10,6 +10,7 @@ import { registerPeopleRoutes } from "./routes/people.js";
 import { registerConnectionRoutes } from "./routes/connections.js";
 import { registerGraphRoutes } from "./routes/graph.js";
 import { registerGmailRoutes } from "./routes/gmail.js";
+import { registerIntroRequestRoutes } from "./routes/intro-requests.js";
 import type { GmailTokens, GmailClient } from "./domain/gmail/client.js";
 
 export interface BuildAppOpts {
@@ -41,6 +42,7 @@ export async function buildApp(
   registerConnectionRoutes(app, db);
   registerGraphRoutes(app, db);
   registerGmailRoutes(app, db, opts.gmail ?? {});
+  registerIntroRequestRoutes(app, db);
 
   return app;
 }

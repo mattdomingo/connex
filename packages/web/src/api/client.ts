@@ -1,19 +1,39 @@
 import type {
   Connection,
   CreateConnectionRequest,
+  CreateIntroRequest,
   CreateInviteRequest,
   CreatePersonRequest,
   GraphNeighborhood,
+  IntroRequest,
   Invite,
   LoginRequest,
   PathResult,
   Person,
   RegisterRequest,
+  RespondIntroRequest,
   SearchResultItem,
   UpdateProfileRequest,
   UserProfile,
   RelationshipType,
 } from "@connex/shared";
+
+export interface GmailStatus {
+  connected: boolean;
+  gmailAddress?: string;
+  lastSyncedAt?: string | null;
+  scope?: string;
+}
+
+export interface GmailSyncResult {
+  ok: true;
+  fetched: number;
+  newMetadata: number;
+  identities: number;
+  relationshipEdges: number;
+  connectionsBridged: number;
+  syncedAt: string;
+}
 
 class ApiClient {
   private base = "/api";
@@ -121,6 +141,41 @@ class ApiClient {
     if (relationshipType) params.set("relationshipType", relationshipType);
     if (maxDegree) params.set("maxDegree", String(maxDegree));
     return this.req<SearchResultItem[]>("GET", `/graph/search?${params}`);
+  }
+
+  // --- Intro requests ---
+  listIntroSent() {
+    return this.req<IntroRequest[]>("GET", "/intro-requests/sent");
+  }
+  listIntroInbox() {
+    return this.req<IntroRequest[]>("GET", "/intro-requests/inbox");
+  }
+  createIntroRequest(body: CreateIntroRequest) {
+    return this.req<IntroRequest>("POST", "/intro-requests", body);
+  }
+  respondIntroRequest(id: number, body: RespondIntroRequest) {
+    return this.req<IntroRequest>("POST", `/intro-requests/${id}/respond`, body);
+  }
+  cancelIntroRequest(id: number) {
+    return this.req<IntroRequest>("POST", `/intro-requests/${id}/cancel`);
+  }
+
+  // --- Gmail ---
+  getGmailStatus() {
+    return this.req<GmailStatus>("GET", "/gmail/status");
+  }
+  syncGmail() {
+    return this.req<GmailSyncResult>("POST", "/gmail/sync");
+  }
+  revokeGmail() {
+    return this.req<{ ok: true }>("POST", "/gmail/revoke");
+  }
+  /**
+   * Kicks off the Google OAuth flow via a full browser navigation
+   * (the backend responds with a 302 to accounts.google.com).
+   */
+  connectGmail() {
+    window.location.href = this.base + "/gmail/connect";
   }
 }
 
