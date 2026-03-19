@@ -1,0 +1,21 @@
+{
+  "name": "connex",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm-run-all --parallel dev:server dev:web",
+    "dev:server": "npm run dev --workspace=@connex/server",
+    "dev:web": "npm run dev --workspace=@connex/web",
+    "build": "npm run build --workspace=@connex/shared && npm run build --workspace=@connex/server && npm run build --workspace=@connex/web",
+    "seed": "npm run seed --workspace=@connex/server",
+    "test": "npm run test --workspace=@connex/server",
+    "typecheck": "npm run typecheck --workspaces --if-present"
+  },
+  "devDependencies": {
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.6.3"
+  }
+}
