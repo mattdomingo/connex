@@ -115,13 +115,26 @@ export const triggerGmailSync = () =>
 export const getGmailSyncStatus = () =>
   request<GmailSyncRun | { status: "never_synced" }>("/gmail/sync/status");
 
-export const getTopConnections = (limit?: number, company?: string) => {
+export const getTopConnections = (opts?: {
+  limit?: number;
+  company?: string;
+  q?: string;
+  showHidden?: boolean;
+}) => {
   const params = new URLSearchParams();
-  if (limit) params.set("limit", String(limit));
-  if (company) params.set("company", company);
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  if (opts?.company) params.set("company", opts.company);
+  if (opts?.q) params.set("q", opts.q);
+  if (opts?.showHidden) params.set("showHidden", "true");
   const qs = params.toString();
   return request<RankedConnection[]>(`/me/top-connections${qs ? `?${qs}` : ""}`);
 };
 
 export const getConnectionEvidence = (personId: number) =>
   request<InteractionEvidence>(`/me/connections/${personId}/evidence`);
+
+export const hideContact = (personId: number) =>
+  request<{ success: boolean }>(`/me/connections/${personId}/hide`, { method: "POST" });
+
+export const unhideContact = (personId: number) =>
+  request<{ success: boolean }>(`/me/connections/${personId}/hide`, { method: "DELETE" });

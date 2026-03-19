@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import type { RankedConnection, InteractionEvidence } from "@connex/shared";
 import * as api from "../api/client.js";
 
@@ -6,38 +6,58 @@ export function TopConnectionsPage() {
   const [connections, setConnections] = useState<RankedConnection[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [companyFilter, setCompanyFilter] = useState("");
+  const [showHidden, setShowHidden] = useState(false);
   const [evidence, setEvidence] = useState<InteractionEvidence | null>(null);
   const [evidenceLoading, setEvidenceLoading] = useState(false);
 
-  useEffect(() => {
-    loadConnections();
-  }, []);
-
-  const loadConnections = async (company?: string) => {
+  const loadConnections = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const data = await api.getTopConnections(100, company || undefined);
+      const data = await api.getTopConnections({
+        limit: 100,
+        q: searchQuery || undefined,
+        company: companyFilter || undefined,
+        showHidden,
+      });
       setConnections(data);
     } catch (err: any) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-  };
+  }, [searchQuery, companyFilter, showHidden]);
 
-  const handleFilter = (e: React.FormEvent) => {
+  useEffect(() => {
+    loadConnections();
+  }, [loadConnections]);
+
+  const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
-    loadConnections(companyFilter);
-  };
-
-  const handleClearFilter = () => {
-    setCompanyFilter("");
     loadConnections();
   };
 
-  const showEvidence = async (personId: number) => {
+  const handleClear = () => {
+    setSearchQuery("");
+    setCompanyFilter("");
+  };
+
+  const handleToggleHide = async (personId: number, currentlyHidden?: boolean) => {
+    try {
+      if (currentlyHidden) {
+        await api.unhideContact(personId);
+      } else {
+        await api.hideContact(personId);
+      }
+      loadConnections();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  const showEvidenceModal = async (personId: number) => {
     setEvidenceLoading(true);
     try {
       const data = await api.getConnectionEvidence(personId);
@@ -59,9 +79,18 @@ export function TopConnectionsPage() {
       </div>
 
       <div className="card mb-4">
-        <form onSubmit={handleFilter} className="flex gap-2 items-end">
-          <div className="flex-1">
-            <label className="form-label">Filter by domain/company</label>
+        <form onSubmit={handleSearch} className="flex gap-2 items-end" style={{ flexWrap: "wrap" }}>
+          <div style={{ flex: "1 1 200px" }}>
+            <label className="form-label">Search name / email</label>
+            <input
+              className="form-input"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="e.g. Alice, alice@example.com"
+            />
+          </div>
+          <div style={{ flex: "1 1 160px" }}>
+            <label className="form-label">Filter by domain</label>
             <input
               className="form-input"
               value={companyFilter}
@@ -69,10 +98,18 @@ export function TopConnectionsPage() {
               placeholder="e.g. google.com"
             />
           </div>
-          <button type="submit" className="btn btn-primary">Filter</button>
-          {companyFilter && (
-            <button type="button" className="btn" onClick={handleClearFilter}>Clear</button>
+          <button type="submit" className="btn btn-primary">Search</button>
+          {(searchQuery || companyFilter) && (
+            <button type="button" className="btn" onClick={handleClear}>Clear</button>
           )}
+          <label className="text-xs text-muted" style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={showHidden}
+              onChange={(e) => setShowHidden(e.target.checked)}
+            />
+            Show hidden
+          </label>
         </form>
       </div>
 
@@ -83,7 +120,9 @@ export function TopConnectionsPage() {
       ) : connections.length === 0 ? (
         <div className="card">
           <p className="text-secondary">
-            No ranked connections found. Connect your Google account and sync Gmail from the Profile page to discover your top connections.
+            {searchQuery || companyFilter
+              ? "No connections match your search. Try broadening your query."
+              : "No ranked connections found. Connect your Google account and sync Gmail from the Profile page to discover your top connections."}
           </p>
         </div>
       ) : (
@@ -96,7 +135,7 @@ export function TopConnectionsPage() {
                 <th style={thStyle}>Email</th>
                 <th style={thStyle}>Domain</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Strength</th>
-                <th style={{ ...thStyle, textAlign: "right" }}>Interactions</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>Msgs</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>Sent/Recv</th>
                 <th style={thStyle}></th>
               </tr>
@@ -105,12 +144,17 @@ export function TopConnectionsPage() {
               {connections.map((c, i) => (
                 <tr
                   key={c.personId}
-                  style={{ borderBottom: "1px solid #21262d", cursor: "pointer" }}
-                  onClick={() => showEvidence(c.personId)}
+                  style={{
+                    borderBottom: "1px solid #21262d",
+                    cursor: "pointer",
+                    opacity: c.hidden ? 0.5 : 1,
+                  }}
+                  onClick={() => showEvidenceModal(c.personId)}
                 >
                   <td style={tdStyle} className="text-muted">{i + 1}</td>
                   <td style={tdStyle}>
                     <strong>{c.name}</strong>
+                    {c.hidden && <span className="text-xs text-muted" style={{ marginLeft: 4 }}>(hidden)</span>}
                   </td>
                   <td style={tdStyle} className="text-secondary text-sm">{c.email}</td>
                   <td style={tdStyle} className="text-muted text-sm">{c.domain}</td>
@@ -121,7 +165,6 @@ export function TopConnectionsPage() {
                       background: "#21262d",
                       borderRadius: 4,
                       overflow: "hidden",
-                      position: "relative",
                       height: 6,
                     }}>
                       <span style={{
@@ -143,7 +186,16 @@ export function TopConnectionsPage() {
                     {c.sentCount}/{c.receivedCount}
                   </td>
                   <td style={tdStyle}>
-                    <span className="text-xs text-muted">details</span>
+                    <button
+                      className="btn text-xs"
+                      style={{ padding: "2px 8px", opacity: 0.7 }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleToggleHide(c.personId, c.hidden);
+                      }}
+                    >
+                      {c.hidden ? "Show" : "Hide"}
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -164,7 +216,7 @@ export function TopConnectionsPage() {
             justifyContent: "center",
             zIndex: 1000,
           }}
-          onClick={() => { setEvidence(null); }}
+          onClick={() => setEvidence(null)}
         >
           <div
             className="card"
@@ -177,12 +229,7 @@ export function TopConnectionsPage() {
               <>
                 <div className="card-header flex justify-between items-center">
                   <span>Interaction Evidence: {evidence.name}</span>
-                  <button
-                    className="btn text-xs"
-                    onClick={() => setEvidence(null)}
-                  >
-                    Close
-                  </button>
+                  <button className="btn text-xs" onClick={() => setEvidence(null)}>Close</button>
                 </div>
                 <div className="text-sm text-secondary mb-2">{evidence.email}</div>
 

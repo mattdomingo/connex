@@ -138,6 +138,7 @@ export interface GraphNode {
   isUser: boolean;
   degree: number;
   locked: boolean;
+  tieStrength?: number;
 }
 
 export interface GraphEdge {
@@ -147,6 +148,8 @@ export interface GraphEdge {
   relationshipType: RelationshipType;
   closenessScore: number;
   status: ConnectionStatus;
+  tieStrength?: number;
+  edgeSource?: "manual" | "gmail";
 }
 
 export interface GraphData {
@@ -200,6 +203,7 @@ export interface RankedConnection {
   sentCount: number;
   receivedCount: number;
   lastInteractionAt: string | null;
+  hidden?: boolean;
 }
 
 export interface InteractionEvidence {

@@ -195,7 +195,7 @@ describe("recomputeScores + getTopConnections", () => {
     seedInteractions();
     recomputeScores(db, 1);
 
-    const top = getTopConnections(db, 1);
+    const top = getTopConnections(db, 1, {});
     expect(top.length).toBe(3);
     // Alice should be ranked #1 (most, recent, two-way)
     expect(top[0].email).toBe("alice@example.com");
@@ -207,7 +207,7 @@ describe("recomputeScores + getTopConnections", () => {
     seedInteractions();
     recomputeScores(db, 1);
 
-    const top = getTopConnections(db, 1);
+    const top = getTopConnections(db, 1, {});
     for (const c of top) {
       expect(c.tieStrength).toBeGreaterThanOrEqual(0);
       expect(c.tieStrength).toBeLessThanOrEqual(1);
@@ -220,7 +220,7 @@ describe("recomputeScores + getTopConnections", () => {
     seedInteractions();
     recomputeScores(db, 1);
 
-    const top = getTopConnections(db, 1);
+    const top = getTopConnections(db, 1, {});
     const names = top.map((c) => c.email);
     expect(names.indexOf("alice@example.com")).toBeLessThan(names.indexOf("carol@other.com"));
     expect(names.indexOf("carol@other.com")).toBeLessThan(names.indexOf("bob@corp.com"));
@@ -230,7 +230,7 @@ describe("recomputeScores + getTopConnections", () => {
     seedInteractions();
     recomputeScores(db, 1);
 
-    const corpOnly = getTopConnections(db, 1, 100, "corp.com");
+    const corpOnly = getTopConnections(db, 1, { domain: "corp.com" });
     expect(corpOnly.length).toBe(1);
     expect(corpOnly[0].email).toBe("bob@corp.com");
   });
@@ -239,17 +239,17 @@ describe("recomputeScores + getTopConnections", () => {
     seedInteractions();
     recomputeScores(db, 1);
 
-    const top1 = getTopConnections(db, 1, 1);
+    const top1 = getTopConnections(db, 1, { limit: 1 });
     expect(top1.length).toBe(1);
   });
 
   it("recompute is idempotent — same results on re-run", () => {
     seedInteractions();
     recomputeScores(db, 1);
-    const first = getTopConnections(db, 1);
+    const first = getTopConnections(db, 1, {});
 
     recomputeScores(db, 1);
-    const second = getTopConnections(db, 1);
+    const second = getTopConnections(db, 1, {});
 
     expect(first.length).toBe(second.length);
     for (let i = 0; i < first.length; i++) {

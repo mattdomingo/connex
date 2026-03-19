@@ -2,33 +2,32 @@ import type Database from "better-sqlite3";
 import type { RankedConnection, InteractionEvidence } from "@connex/shared";
 
 /**
- * Tie-Strength Scoring Formula
- * ============================
+ * Tie-Strength Scoring Formula v2
+ * ================================
  *
  * For each counterparty (per user), we compute:
  *
- * 1. Weighted interaction count:
+ * 1. Per-interaction contribution:
+ *    weight * recency_factor
  *    - Direct (to/from): weight 1.0
  *    - CC:               weight 0.3
  *    - BCC:              weight 0.1
+ *    - Recency: exp(-ln(2)/90 * days_ago) — 90-day half-life
  *
- * 2. Recency-weighted score:
- *    Each interaction contributes: weight * exp(-decay * days_ago)
- *    Decay half-life: 90 days  →  decay = ln(2) / 90 ≈ 0.0077
+ * 2. Volume dampening:
+ *    sqrt(recency_weighted_sum) — diminishing returns for high-frequency contacts
  *
- * 3. Direction balance (0–1):
- *    balance = 1 - |sent_fraction - 0.5| * 2
- *    Perfect 50/50 mix = 1.0, all one-way = 0.0
+ * 3. Thread diversity bonus:
+ *    1 + 0.5 * min(log2(unique_threads), 5) — rewards diverse conversations
  *
- * 4. Final raw score:
- *    raw = recency_weighted_sum * (0.5 + 0.5 * direction_balance)
+ * 4. Direction balance (0–1):
+ *    1 - |sent_fraction - 0.5| * 2  — 50/50 = 1.0, one-way = 0.0
  *
- * 5. Normalization:
- *    All scores for a user are normalized to [0, 1] relative to the
- *    highest raw score in that user's set.
+ * 5. Final raw score:
+ *    raw = sqrt(recency_weighted_sum) * (0.5 + 0.5 * direction_balance) * thread_factor
  *
- * The formula rewards: frequent contact, recent contact, two-way conversation,
- * and direct (not CC) communication.
+ * 6. Normalization:
+ *    All scores for a user normalized to [0, 1] relative to the highest raw score.
  */
 
 const DECAY_HALF_LIFE_DAYS = 90;
@@ -43,6 +42,7 @@ export interface InteractionRow {
   is_cc: number;
   is_bcc: number;
   occurred_at: string;
+  gmail_thread_id?: string;
 }
 
 export interface CounterpartyAgg {
@@ -52,6 +52,7 @@ export interface CounterpartyAgg {
   sentCount: number;
   receivedCount: number;
   lastInteractionAt: string | null;
+  uniqueThreads: number;
 }
 
 /**
@@ -83,6 +84,14 @@ export function directionBalance(sentCount: number, receivedCount: number): numb
 }
 
 /**
+ * Thread diversity factor. More unique threads = more real conversations.
+ */
+export function threadFactor(uniqueThreads: number): number {
+  if (uniqueThreads <= 0) return 1.0;
+  return 1 + 0.5 * Math.min(Math.log2(uniqueThreads), 5);
+}
+
+/**
  * Compute raw score for a single counterparty from their interactions.
  */
 export function computeRawScore(
@@ -93,6 +102,7 @@ export function computeRawScore(
   let sentCount = 0;
   let receivedCount = 0;
   let lastInteractionAt: string | null = null;
+  const threads = new Set<string>();
 
   for (const row of interactions) {
     const weight = interactionWeight(row.is_cc === 1, row.is_bcc === 1);
@@ -105,10 +115,16 @@ export function computeRawScore(
     if (!lastInteractionAt || row.occurred_at > lastInteractionAt) {
       lastInteractionAt = row.occurred_at;
     }
+
+    if (row.gmail_thread_id) threads.add(row.gmail_thread_id);
   }
 
   const balance = directionBalance(sentCount, receivedCount);
-  const rawScore = recencyWeightedSum * (0.5 + 0.5 * balance);
+  const directionFactor = 0.5 + 0.5 * balance;
+  const tFactor = threadFactor(threads.size);
+
+  // sqrt dampening prevents very high-frequency contacts from dominating
+  const rawScore = Math.sqrt(recencyWeightedSum) * directionFactor * tFactor;
 
   return {
     email: "" as const,
@@ -117,6 +133,7 @@ export function computeRawScore(
     sentCount,
     receivedCount,
     lastInteractionAt,
+    uniqueThreads: threads.size,
   };
 }
 
@@ -130,18 +147,18 @@ export function recomputeScores(
 ): void {
   const now = new Date();
 
-  // Group interactions by counterparty email
+  // Group interactions by counterparty email — include thread ID for diversity scoring
   const rows = db
     .prepare(
-      `SELECT counterparty_email, direction, is_cc, is_bcc, occurred_at
+      `SELECT counterparty_email, counterparty_name, direction, is_cc, is_bcc, occurred_at, gmail_thread_id
        FROM email_interactions
        WHERE user_id = ?
        ORDER BY counterparty_email`,
     )
-    .all(userId) as (InteractionRow & { counterparty_email: string })[];
+    .all(userId) as (InteractionRow & { counterparty_email: string; counterparty_name: string | null })[];
 
   // Aggregate by counterparty
-  const byEmail = new Map<string, InteractionRow[]>();
+  const byEmail = new Map<string, (InteractionRow & { counterparty_email: string; counterparty_name: string | null })[]>();
   for (const row of rows) {
     const list = byEmail.get(row.counterparty_email) || [];
     list.push(row);
@@ -175,13 +192,20 @@ export function recomputeScores(
        computed_at = datetime('now')`,
   );
 
+  // Build a map of best known name per counterparty email
+  const bestName = new Map<string, string>();
+  for (const row of rows) {
+    if (row.counterparty_name && !bestName.has(row.counterparty_email)) {
+      bestName.set(row.counterparty_email, row.counterparty_name);
+    }
+  }
+
   db.transaction(() => {
     for (const agg of aggregates) {
       // Find or create person for this email
       let personRow = findPerson.get(agg.email) as any;
       if (!personRow) {
-        // Create a minimal person node
-        const name = agg.email.split("@")[0]; // fallback name from email
+        const name = bestName.get(agg.email) || agg.email.split("@")[0];
         const domain = agg.email.split("@")[1] || null;
         const insertResult = db
           .prepare(
@@ -209,12 +233,20 @@ export function recomputeScores(
 
 // ── Query Functions ──
 
+export interface TopConnectionsFilter {
+  limit?: number;
+  domain?: string;
+  q?: string;
+  includeHidden?: boolean;
+}
+
 export function getTopConnections(
   db: Database.Database,
   userId: number,
-  limit: number = 100,
-  domain?: string,
+  opts: TopConnectionsFilter = {},
 ): RankedConnection[] {
+  const { limit = 100, domain, q, includeHidden = false } = opts;
+
   let query = `
     SELECT rs.*, p.name, p.email, p.company
     FROM relationship_scores rs
@@ -223,16 +255,36 @@ export function getTopConnections(
   `;
   const params: any[] = [userId];
 
+  // Exclude hidden contacts unless explicitly requested
+  if (!includeHidden) {
+    query += ` AND rs.person_id NOT IN (SELECT person_id FROM hidden_contacts WHERE user_id = ?)`;
+    params.push(userId);
+  }
+
   if (domain) {
     query += ` AND (p.email LIKE ? OR p.company LIKE ?)`;
     const pattern = `%${domain}%`;
     params.push(pattern, pattern);
   }
 
+  if (q) {
+    query += ` AND (p.name LIKE ? OR p.email LIKE ? OR p.company LIKE ?)`;
+    const pattern = `%${q}%`;
+    params.push(pattern, pattern, pattern);
+  }
+
   query += ` ORDER BY rs.tie_strength DESC LIMIT ?`;
   params.push(limit);
 
   const rows = db.prepare(query).all(...params) as any[];
+
+  // Check hidden status if including hidden
+  const hiddenSet = includeHidden
+    ? new Set(
+        (db.prepare("SELECT person_id FROM hidden_contacts WHERE user_id = ?").all(userId) as any[])
+          .map((r) => r.person_id),
+      )
+    : new Set<number>();
 
   return rows.map((r) => ({
     personId: r.person_id,
@@ -245,6 +297,7 @@ export function getTopConnections(
     sentCount: r.sent_count,
     receivedCount: r.received_count,
     lastInteractionAt: r.last_interaction_at,
+    hidden: hiddenSet.has(r.person_id) || undefined,
   }));
 }
 

@@ -24,7 +24,7 @@ router.get("/explore", requireAuth, (req, res) => {
     ? parseInt(req.query.center as string, 10)
     : person.id;
 
-  const graphData = getGraphForPerson(db, centerId, policy);
+  const graphData = getGraphForPerson(db, centerId, policy, req.user!.userId);
   res.json(graphData);
 });
 

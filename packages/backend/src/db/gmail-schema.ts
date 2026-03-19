@@ -67,6 +67,16 @@ export function initializeGmailSchema(db: Database.Database): void {
       UNIQUE(user_id, person_id)
     );
 
+    CREATE TABLE IF NOT EXISTS hidden_contacts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      person_id INTEGER NOT NULL,
+      hidden_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (person_id) REFERENCES persons(id),
+      UNIQUE(user_id, person_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_google_accounts_user ON google_accounts(user_id);
     CREATE INDEX IF NOT EXISTS idx_gmail_sync_runs_user ON gmail_sync_runs(user_id);
     CREATE INDEX IF NOT EXISTS idx_email_interactions_user_email
@@ -75,5 +85,7 @@ export function initializeGmailSchema(db: Database.Database): void {
       ON email_interactions(user_id, occurred_at);
     CREATE INDEX IF NOT EXISTS idx_relationship_scores_user_strength
       ON relationship_scores(user_id, tie_strength DESC);
+    CREATE INDEX IF NOT EXISTS idx_hidden_contacts_user
+      ON hidden_contacts(user_id);
   `);
 }

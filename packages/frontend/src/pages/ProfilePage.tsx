@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useAuth } from "../hooks/useAuth.js";
 import * as api from "../api/client.js";
 import type { GoogleAccountStatus, GmailSyncRun } from "@connex/shared";
@@ -19,9 +19,30 @@ export function ProfilePage() {
   const [syncStatus, setSyncStatus] = useState<GmailSyncRun | { status: "never_synced" } | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(true);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const pollSyncStatus = useCallback(async () => {
+    try {
+      const ss = await api.getGmailSyncStatus();
+      setSyncStatus(ss);
+      if ("status" in ss && ss.status !== "running") {
+        // Sync finished — stop polling
+        if (pollRef.current) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+        }
+        setSyncing(false);
+      }
+    } catch {
+      // ignore poll errors
+    }
+  }, []);
 
   useEffect(() => {
     loadGoogleStatus();
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
   }, []);
 
   const loadGoogleStatus = async () => {
@@ -32,8 +53,13 @@ export function ProfilePage() {
       ]);
       setGoogleStatus(gs);
       setSyncStatus(ss);
+      // If sync is currently running, start polling
+      if ("status" in ss && ss.status === "running") {
+        setSyncing(true);
+        pollRef.current = setInterval(pollSyncStatus, 3000);
+      }
     } catch {
-      // Google not configured or not connected — that's fine
+      // Google not configured or not connected
     } finally {
       setGoogleLoading(false);
     }
@@ -79,14 +105,19 @@ export function ProfilePage() {
     try {
       const result = await api.triggerGmailSync();
       setSyncStatus(result);
+      // Start polling if sync is running
+      if (result.status === "running") {
+        pollRef.current = setInterval(pollSyncStatus, 3000);
+      }
     } catch (err: any) {
       setError(err.message);
-    } finally {
       setSyncing(false);
     }
   };
 
   if (!person) return null;
+
+  const syncRun = syncStatus && "id" in syncStatus ? syncStatus as GmailSyncRun : null;
 
   return (
     <div>
@@ -177,6 +208,7 @@ export function ProfilePage() {
                   className="btn text-xs"
                   onClick={handleDisconnectGoogle}
                   style={{ color: "#f85149" }}
+                  disabled={syncing}
                 >
                   Disconnect
                 </button>
@@ -184,28 +216,59 @@ export function ProfilePage() {
 
               <div style={{ borderTop: "1px solid #30363d", paddingTop: 12 }}>
                 <div className="flex justify-between items-center">
-                  <div>
+                  <div style={{ flex: 1 }}>
                     <div className="text-sm font-medium">Gmail Sync</div>
                     <div className="text-xs text-muted mt-1">
-                      {syncStatus && "status" in syncStatus
-                        ? syncStatus.status === "never_synced"
-                          ? "Never synced"
-                          : syncStatus.status === "success"
-                            ? `Last sync: ${(syncStatus as GmailSyncRun).messagesProcessed} messages processed`
-                            : syncStatus.status === "running"
-                              ? "Sync in progress..."
-                              : `Last sync failed: ${(syncStatus as GmailSyncRun).errorMessage || "Unknown error"}`
-                        : "Loading..."}
+                      {syncing ? (
+                        <span style={{ color: "#d29922" }}>
+                          Syncing inbox metadata...
+                          {syncRun && syncRun.messagesScanned > 0 && (
+                            <> ({syncRun.messagesScanned} scanned)</>
+                          )}
+                        </span>
+                      ) : syncRun ? (
+                        syncRun.status === "success" ? (
+                          <span style={{ color: "#3fb950" }}>
+                            Last sync: {syncRun.messagesProcessed} interactions from {syncRun.messagesScanned} messages
+                            {syncRun.finishedAt && <> · {new Date(syncRun.finishedAt).toLocaleString()}</>}
+                          </span>
+                        ) : syncRun.status === "failed" ? (
+                          <span style={{ color: "#f85149" }}>
+                            Last sync failed: {syncRun.errorMessage || "Unknown error"}
+                          </span>
+                        ) : null
+                      ) : (
+                        "Never synced — click Sync Now to discover your top connections"
+                      )}
                     </div>
                   </div>
                   <button
                     className="btn btn-primary text-sm"
                     onClick={handleSync}
                     disabled={syncing}
+                    style={{ minWidth: 100 }}
                   >
-                    {syncing ? "Syncing..." : "Sync Now"}
+                    {syncing ? (
+                      <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <span className="spinner" />
+                        Syncing...
+                      </span>
+                    ) : "Sync Now"}
                   </button>
                 </div>
+
+                {/* Progress bar while syncing */}
+                {syncing && (
+                  <div style={{ marginTop: 8, height: 3, background: "#21262d", borderRadius: 2, overflow: "hidden" }}>
+                    <div style={{
+                      height: "100%",
+                      background: "#d29922",
+                      borderRadius: 2,
+                      animation: "indeterminate 1.5s ease-in-out infinite",
+                      width: "30%",
+                    }} />
+                  </div>
+                )}
               </div>
             </>
           ) : (
@@ -220,6 +283,26 @@ export function ProfilePage() {
           )}
         </div>
       )}
+
+      <style>{`
+        .spinner {
+          display: inline-block;
+          width: 12px;
+          height: 12px;
+          border: 2px solid rgba(255,255,255,0.3);
+          border-top-color: #fff;
+          border-radius: 50%;
+          animation: spin 0.6s linear infinite;
+        }
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+        @keyframes indeterminate {
+          0% { margin-left: 0; width: 30%; }
+          50% { margin-left: 40%; width: 40%; }
+          100% { margin-left: 70%; width: 30%; }
+        }
+      `}</style>
     </div>
   );
 }

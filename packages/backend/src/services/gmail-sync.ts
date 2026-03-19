@@ -67,6 +67,63 @@ export function classifyDirection(
     : "received";
 }
 
+// ── Sender Quality Filtering ──
+
+const LOW_QUALITY_LOCAL_PATTERNS = [
+  /^noreply$/,
+  /^no-reply$/,
+  /^donotreply$/,
+  /^do-not-reply$/,
+  /^notifications?$/,
+  /^newsletter/,
+  /^updates?$/,
+  /^alerts?$/,
+  /^mailer-daemon$/,
+  /^postmaster$/,
+  /^bounce/,
+  /^unsubscribe$/,
+  /^digest/,
+  /^automated/,
+  /^daemon$/,
+  /^root$/,
+  /^cron$/,
+];
+
+const LOW_QUALITY_DOMAINS = new Set([
+  "googlegroups.com",
+  "mailchimp.com",
+  "sendgrid.net",
+  "mandrillapp.com",
+  "amazonses.com",
+  "mailgun.org",
+  "postmarkapp.com",
+  "calendar-notification.google.com",
+  "docs.google.com",
+  "drive.google.com",
+  "e.mailchimp.com",
+  "em.notifications.google.com",
+  "mail.github.com",
+  "noreply.github.com",
+  "notify.bugsnag.com",
+]);
+
+/**
+ * Filter out mailing lists, no-reply addresses, and spam-like senders.
+ */
+export function isLowQualitySender(email: string): boolean {
+  const lower = email.toLowerCase();
+  const at = lower.lastIndexOf("@");
+  if (at <= 0) return true;
+
+  const local = lower.substring(0, at);
+  const domain = lower.substring(at + 1);
+
+  if (LOW_QUALITY_DOMAINS.has(domain)) return true;
+  if (LOW_QUALITY_LOCAL_PATTERNS.some((p) => p.test(local))) return true;
+
+  return false;
+}
+
 // ── Gmail API Interaction ──
 
 interface GmailMessageMeta {
@@ -161,6 +218,7 @@ function parseMessage(
     // Counterparties are the recipients
     for (const addr of parseAddressHeader(to)) {
       if (normalizeEmail(addr.email) === normalizeEmail(ownerEmail)) continue;
+      if (isLowQualitySender(addr.email)) continue;
       interactions.push({
         gmailMessageId: msg.id,
         gmailThreadId: msg.threadId,
@@ -175,6 +233,7 @@ function parseMessage(
     }
     for (const addr of parseAddressHeader(cc)) {
       if (normalizeEmail(addr.email) === normalizeEmail(ownerEmail)) continue;
+      if (isLowQualitySender(addr.email)) continue;
       interactions.push({
         gmailMessageId: msg.id,
         gmailThreadId: msg.threadId,
@@ -189,6 +248,7 @@ function parseMessage(
     }
     for (const addr of parseAddressHeader(bcc)) {
       if (normalizeEmail(addr.email) === normalizeEmail(ownerEmail)) continue;
+      if (isLowQualitySender(addr.email)) continue;
       interactions.push({
         gmailMessageId: msg.id,
         gmailThreadId: msg.threadId,
@@ -204,7 +264,7 @@ function parseMessage(
   } else {
     // Direction is received — counterparty is the sender
     const senderAddr = parseAddressHeader(from)[0];
-    if (senderAddr && normalizeEmail(senderAddr.email) !== normalizeEmail(ownerEmail)) {
+    if (senderAddr && normalizeEmail(senderAddr.email) !== normalizeEmail(ownerEmail) && !isLowQualitySender(senderAddr.email)) {
       interactions.push({
         gmailMessageId: msg.id,
         gmailThreadId: msg.threadId,

@@ -107,12 +107,22 @@ function bfs(
 }
 
 /**
+ * Max Gmail contacts to include in graph (prevents crowding).
+ */
+const GMAIL_GRAPH_LIMIT = 50;
+const GMAIL_GRAPH_MIN_STRENGTH = 0.05;
+
+/**
  * Get the graph data centered on a person, with degree-based gating.
+ * When viewingUserId is provided and matches the center, Gmail-derived
+ * contacts (from relationship_scores) are merged into the graph as
+ * 1st-degree nodes with synthetic edges.
  */
 export function getGraphForPerson(
   db: Database.Database,
   centerPersonId: number,
   policy: EntitlementPolicy = FREE_POLICY,
+  viewingUserId?: number,
 ): GraphData {
   // Get all connections (we need pending for display too)
   const allEdges = db
@@ -134,6 +144,44 @@ export function getGraphForPerson(
       personIds.add(edge.source_person_id);
       personIds.add(edge.target_person_id);
     }
+  }
+
+  // Gmail-derived contacts: if viewing user's own graph, merge scored contacts
+  interface ScoredContact { person_id: number; tie_strength: number }
+  let scoredContacts: ScoredContact[] = [];
+
+  if (viewingUserId) {
+    // Check if center person belongs to the viewing user
+    const centerPerson = db
+      .prepare("SELECT user_id FROM persons WHERE id = ?")
+      .get(centerPersonId) as any;
+
+    if (centerPerson && centerPerson.user_id === viewingUserId) {
+      scoredContacts = db
+        .prepare(
+          `SELECT rs.person_id, rs.tie_strength
+           FROM relationship_scores rs
+           WHERE rs.user_id = ?
+             AND rs.tie_strength >= ?
+             AND rs.person_id NOT IN (SELECT person_id FROM hidden_contacts WHERE user_id = ?)
+           ORDER BY rs.tie_strength DESC
+           LIMIT ?`,
+        )
+        .all(viewingUserId, GMAIL_GRAPH_MIN_STRENGTH, viewingUserId, GMAIL_GRAPH_LIMIT) as ScoredContact[];
+
+      for (const sc of scoredContacts) {
+        personIds.add(sc.person_id);
+        if (!degrees.has(sc.person_id)) {
+          degrees.set(sc.person_id, 1); // gmail contacts are 1st-degree from center
+        }
+      }
+    }
+  }
+
+  // Build scored person lookup
+  const scoredMap = new Map<number, number>();
+  for (const sc of scoredContacts) {
+    scoredMap.set(sc.person_id, sc.tie_strength);
   }
 
   // Fetch person data
@@ -165,6 +213,7 @@ export function getGraphForPerson(
       isUser: person.user_id !== null,
       degree,
       locked,
+      tieStrength: scoredMap.get(personId),
     });
   }
 
@@ -181,7 +230,44 @@ export function getGraphForPerson(
       relationshipType: e.relationship_type as any,
       closenessScore: e.closeness_score,
       status: e.status as any,
+      edgeSource: "manual" as const,
     }));
+
+  // Track which person IDs already have an edge to center
+  const connectedToCenter = new Set<number>();
+  for (const e of edges) {
+    if (e.source === centerPersonId) connectedToCenter.add(e.target);
+    if (e.target === centerPersonId) connectedToCenter.add(e.source);
+  }
+
+  // Add synthetic edges for Gmail-derived contacts not already connected
+  let syntheticId = -1;
+  for (const sc of scoredContacts) {
+    if (connectedToCenter.has(sc.person_id)) continue;
+    if (sc.person_id === centerPersonId) continue;
+    if (!nodeIdSet.has(sc.person_id)) continue;
+
+    edges.push({
+      id: syntheticId--,
+      source: centerPersonId,
+      target: sc.person_id,
+      relationshipType: "other",
+      closenessScore: Math.max(1, Math.round(sc.tie_strength * 10)),
+      status: "accepted",
+      tieStrength: sc.tie_strength,
+      edgeSource: "gmail",
+    });
+  }
+
+  // Annotate tieStrength on existing edges to center from scored data
+  for (const e of edges) {
+    if (e.edgeSource === "manual") {
+      const otherId = e.source === centerPersonId ? e.target : e.target === centerPersonId ? e.source : null;
+      if (otherId !== null && scoredMap.has(otherId) && e.tieStrength === undefined) {
+        e.tieStrength = scoredMap.get(otherId);
+      }
+    }
+  }
 
   return { nodes, edges, centerPersonId };
 }
