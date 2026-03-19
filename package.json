@@ -1,0 +1,20 @@
+{
+  "name": "connex",
+  "private": true,
+  "workspaces": [
+    "packages/shared",
+    "packages/backend",
+    "packages/frontend"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev -w packages/backend\" \"npm run dev -w packages/frontend\"",
+    "build": "npm run build -w packages/shared && npm run build -w packages/backend && npm run build -w packages/frontend",
+    "test": "npm run test -w packages/backend",
+    "seed": "npm run seed -w packages/backend",
+    "setup": "npm install && npm run build -w packages/shared && npm run seed -w packages/backend"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "typescript": "^5.7.0"
+  }
+}
