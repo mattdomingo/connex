@@ -14,6 +14,10 @@ import type {
   GraphData,
   ShortestPathResult,
   SearchResult,
+  GoogleAccountStatus,
+  GmailSyncRun,
+  RankedConnection,
+  InteractionEvidence,
 } from "@connex/shared";
 
 const BASE = "/api";
@@ -97,3 +101,27 @@ export const getShortestPath = (fromId: number, toId: number) =>
 
 export const searchGraph = (q: string) =>
   request<SearchResult[]>(`/graph/search?q=${encodeURIComponent(q)}`);
+
+// Google / Gmail
+export const getGoogleStatus = () =>
+  request<GoogleAccountStatus>("/integrations/google/status");
+
+export const disconnectGoogle = () =>
+  request<{ success: boolean }>("/integrations/google/disconnect", { method: "POST" });
+
+export const triggerGmailSync = () =>
+  request<GmailSyncRun>("/gmail/sync", { method: "POST" });
+
+export const getGmailSyncStatus = () =>
+  request<GmailSyncRun | { status: "never_synced" }>("/gmail/sync/status");
+
+export const getTopConnections = (limit?: number, company?: string) => {
+  const params = new URLSearchParams();
+  if (limit) params.set("limit", String(limit));
+  if (company) params.set("company", company);
+  const qs = params.toString();
+  return request<RankedConnection[]>(`/me/top-connections${qs ? `?${qs}` : ""}`);
+};
+
+export const getConnectionEvidence = (personId: number) =>
+  request<InteractionEvidence>(`/me/connections/${personId}/evidence`);

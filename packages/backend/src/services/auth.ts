@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import type Database from "better-sqlite3";
 
 const JWT_SECRET = process.env.JWT_SECRET || "connex-dev-secret-change-in-production";
@@ -39,6 +40,34 @@ export function createUser(
   );
   const insertPerson = db.prepare(
     "INSERT INTO persons (name, email, user_id, created_by_user_id) VALUES (?, ?, ?, ?)"
+  );
+
+  const result = db.transaction(() => {
+    const userResult = insertUser.run(email, passwordHash);
+    const userId = Number(userResult.lastInsertRowid);
+    const personResult = insertPerson.run(name, email, userId, userId);
+    const personId = Number(personResult.lastInsertRowid);
+    return { userId, personId };
+  })();
+
+  return result;
+}
+
+/**
+ * Create a user from Google OAuth (no password — uses random unguessable hash).
+ */
+export function createGoogleUser(
+  db: Database.Database,
+  email: string,
+  name: string,
+): { userId: number; personId: number } {
+  const passwordHash = hashPassword(crypto.randomUUID());
+
+  const insertUser = db.prepare(
+    "INSERT INTO users (email, password_hash) VALUES (?, ?)",
+  );
+  const insertPerson = db.prepare(
+    "INSERT INTO persons (name, email, user_id, created_by_user_id) VALUES (?, ?, ?, ?)",
   );
 
   const result = db.transaction(() => {

@@ -24,12 +24,12 @@ const SCOPES = [
 // ── OAuth URL + State ──
 
 /**
- * Build the Google OAuth consent URL.
+ * Build the Google OAuth consent URL for account-linking (authenticated user).
  * State is an encrypted JSON payload containing userId + timestamp for CSRF protection.
  */
 export function buildConsentUrl(userId: number): string {
   const config = getGoogleConfig();
-  const state = encrypt(JSON.stringify({ userId, ts: Date.now() }));
+  const state = encrypt(JSON.stringify({ mode: "connect", userId, ts: Date.now() }));
 
   const params = new URLSearchParams({
     client_id: config.clientId,
@@ -56,6 +56,64 @@ export function validateState(state: string): number {
   return payload.userId;
 }
 
+// ── Auth-mode OAuth (public signup/signin, no pre-existing userId) ──
+
+export function getAuthRedirectUri(): string {
+  return (
+    process.env.GOOGLE_AUTH_REDIRECT_URI ||
+    "http://localhost:3001/api/auth/google/callback"
+  );
+}
+
+/**
+ * Build a Google OAuth consent URL for signup/signin (no userId needed).
+ */
+export function buildAuthConsentUrl(): string {
+  const config = getGoogleConfig();
+  const state = encrypt(JSON.stringify({ mode: "auth", ts: Date.now() }));
+
+  const params = new URLSearchParams({
+    client_id: config.clientId,
+    redirect_uri: getAuthRedirectUri(),
+    response_type: "code",
+    scope: SCOPES.join(" "),
+    access_type: "offline",
+    prompt: "consent",
+    state,
+  });
+
+  return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+}
+
+/**
+ * Validate auth-mode state (no userId). Throws if expired or wrong mode.
+ */
+export function validateAuthState(state: string): void {
+  const payload = JSON.parse(decrypt(state));
+  if (payload.mode !== "auth") {
+    throw new Error("Invalid OAuth state mode");
+  }
+  const age = Date.now() - payload.ts;
+  if (age > 10 * 60 * 1000) {
+    throw new Error("OAuth state expired");
+  }
+}
+
+/**
+ * Find a user ID by their linked Google sub (unique Google account identifier).
+ */
+export function findUserIdByGoogleSub(
+  db: Database.Database,
+  googleSub: string,
+): number | null {
+  const row = db
+    .prepare(
+      "SELECT user_id FROM google_accounts WHERE google_sub = ? AND provider = 'google'",
+    )
+    .get(googleSub) as any;
+  return row ? row.user_id : null;
+}
+
 // ── Token Exchange ──
 
 export interface TokenResponse {
@@ -74,6 +132,7 @@ export interface GoogleUserInfo {
 
 export async function exchangeCodeForTokens(
   code: string,
+  redirectUri?: string,
 ): Promise<TokenResponse> {
   const config = getGoogleConfig();
   const res = await fetch("https://oauth2.googleapis.com/token", {
@@ -83,7 +142,7 @@ export async function exchangeCodeForTokens(
       code,
       client_id: config.clientId,
       client_secret: config.clientSecret,
-      redirect_uri: config.redirectUri,
+      redirect_uri: redirectUri || config.redirectUri,
       grant_type: "authorization_code",
     }),
   });

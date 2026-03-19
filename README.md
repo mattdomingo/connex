@@ -89,12 +89,16 @@ npm run test
 npm run test:watch -w packages/backend
 ```
 
-44 tests covering:
+120 tests covering:
 - Invite creation, validation, redemption, and expiration
 - Graph traversal (BFS, degree calculation, shortest path)
 - Degree-based access gating (free vs premium policies)
 - Connection creation, confirmation workflow, and constraints
 - Entitlement policy structure
+- Google OAuth auth-mode state, account linking, Google user creation
+- Gmail sync email parsing, direction classification, upsert idempotency
+- Tie-strength scoring primitives and full recompute pipeline
+- Crypto encryption/decryption round-trips and tamper detection
 
 ## Schema
 
@@ -146,6 +150,8 @@ Every graph node is a `person`. Registered users link to a person via `user_id`.
 |--------|------|------|-------------|
 | POST | /api/auth/signup | No | Register with invite code |
 | POST | /api/auth/signin | No | Sign in |
+| GET | /api/auth/google/start | No | Redirect to Google OAuth for signup/signin |
+| GET | /api/auth/google/callback | No | Google OAuth callback (creates or signs in user) |
 | GET | /api/auth/me | Yes | Get current user + profile |
 | GET | /api/persons/me | Yes | Get own profile |
 | PUT | /api/persons/me | Yes | Update own profile |
@@ -172,6 +178,23 @@ Every graph node is a `person`. Registered users link to a person via `user_id`.
 | GET | /api/me/connections?company= | Yes | Filter ranked contacts by domain |
 | GET | /api/me/connections/:id/evidence | Yes | Interaction evidence for a person |
 
+## Google Login / Signup
+
+Users can sign in or create an account via Google OAuth ("Continue with Google" buttons on the auth pages). The flow:
+
+1. User clicks "Continue with Google" on the sign-in or sign-up page
+2. Browser redirects to `/api/auth/google/start` → Google OAuth consent
+3. Google redirects back to `/api/auth/google/callback`
+4. Backend exchanges the authorization code for tokens, reads the Google profile (sub, email, name)
+5. If a user with that Google sub already exists: signs them in
+6. If a user with that email exists: links their Google account and signs them in
+7. Otherwise: creates a new user + person record (no invite code required for Google signup)
+8. Issues a JWT and redirects to the frontend
+
+**Note:** Google signup bypasses the invite code requirement. The existing email/password + invite flow remains fully functional.
+
+Add `http://localhost:3001/api/auth/google/callback` as an authorized redirect URI in your Google Cloud Console (in addition to the account-linking callback).
+
 ## Connect Google & Gmail Sync
 
 ### Setup
@@ -185,6 +208,7 @@ Every graph node is a `person`. Registered users link to a person via `user_id`.
 export GOOGLE_CLIENT_ID="your-client-id"
 export GOOGLE_CLIENT_SECRET="your-client-secret"
 export GOOGLE_REDIRECT_URI="http://localhost:3001/api/integrations/google/connect/callback"
+export GOOGLE_AUTH_REDIRECT_URI="http://localhost:3001/api/auth/google/callback"
 export GOOGLE_OAUTH_ENCRYPTION_KEY="any-random-secret-for-token-encryption"
 export GMAIL_BACKFILL_DAYS=180    # optional, default 180
 export GMAIL_BATCH_SIZE=100       # optional, default 100

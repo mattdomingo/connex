@@ -14,6 +14,7 @@ interface AuthContextType extends AuthState {
   signUp: (email: string, password: string, name: string, inviteCode: string) => Promise<void>;
   signOut: () => void;
   refreshProfile: () => Promise<void>;
+  setTokenFromCallback: (token: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -67,8 +68,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setState((prev) => ({ ...prev, person }));
   };
 
+  const setTokenFromCallback = async (token: string) => {
+    localStorage.setItem("connex_token", token);
+    try {
+      const { user, person } = await api.getMe();
+      setState({ user, person, token, loading: false });
+    } catch {
+      localStorage.removeItem("connex_token");
+      setState({ user: null, person: null, token: null, loading: false });
+    }
+  };
+
   return (
-    <AuthContext.Provider value={{ ...state, signIn, signUp, signOut, refreshProfile }}>
+    <AuthContext.Provider value={{ ...state, signIn, signUp, signOut, refreshProfile, setTokenFromCallback }}>
       {children}
     </AuthContext.Provider>
   );

@@ -9,6 +9,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const links = [
     { to: "/graph", label: "Graph Explorer" },
     { to: "/connections", label: "Connections" },
+    { to: "/top-connections", label: "Top Connections" },
     { to: "/search", label: "Search" },
     { to: "/invites", label: "Invites" },
     { to: "/profile", label: "Profile" },

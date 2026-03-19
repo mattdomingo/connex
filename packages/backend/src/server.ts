@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import { getDb, closeDb } from "./db/index.js";
 import authRoutes from "./routes/auth.js";
+import authGoogleRoutes from "./routes/auth-google.js";
 import personRoutes from "./routes/persons.js";
 import connectionRoutes from "./routes/connections.js";
 import inviteRoutes from "./routes/invites.js";
@@ -21,6 +22,7 @@ getDb();
 
 // Routes
 app.use("/api/auth", authRoutes);
+app.use("/api/auth/google", authGoogleRoutes);
 app.use("/api/persons", personRoutes);
 app.use("/api/connections", connectionRoutes);
 app.use("/api/invites", inviteRoutes);

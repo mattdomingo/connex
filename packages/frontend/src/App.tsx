@@ -3,11 +3,13 @@ import { useAuth } from "./hooks/useAuth.js";
 import { Layout } from "./components/Layout.js";
 import { SignInPage } from "./pages/SignInPage.js";
 import { SignUpPage } from "./pages/SignUpPage.js";
+import { GoogleCallbackPage } from "./pages/GoogleCallbackPage.js";
 import { GraphPage } from "./pages/GraphPage.js";
 import { ConnectionsPage } from "./pages/ConnectionsPage.js";
 import { ProfilePage } from "./pages/ProfilePage.js";
 import { InvitesPage } from "./pages/InvitesPage.js";
 import { SearchPage } from "./pages/SearchPage.js";
+import { TopConnectionsPage } from "./pages/TopConnectionsPage.js";
 
 export function App() {
   const { user, loading } = useAuth();
@@ -25,6 +27,7 @@ export function App() {
       <Routes>
         <Route path="/signin" element={<SignInPage />} />
         <Route path="/signup" element={<SignUpPage />} />
+        <Route path="/auth/google/callback" element={<GoogleCallbackPage />} />
         <Route path="*" element={<Navigate to="/signin" replace />} />
       </Routes>
     );
@@ -39,6 +42,7 @@ export function App() {
         <Route path="/search" element={<SearchPage />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/invites" element={<InvitesPage />} />
+        <Route path="/top-connections" element={<TopConnectionsPage />} />
         <Route path="*" element={<Navigate to="/graph" replace />} />
       </Routes>
     </Layout>

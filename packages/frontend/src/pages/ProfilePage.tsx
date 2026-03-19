@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useAuth } from "../hooks/useAuth.js";
 import * as api from "../api/client.js";
+import type { GoogleAccountStatus, GmailSyncRun } from "@connex/shared";
 
 export function ProfilePage() {
   const { person, refreshProfile } = useAuth();
@@ -12,6 +13,31 @@ export function ProfilePage() {
   const [location, setLocation] = useState(person?.location ?? "");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
+
+  // Google/Gmail state
+  const [googleStatus, setGoogleStatus] = useState<GoogleAccountStatus | null>(null);
+  const [syncStatus, setSyncStatus] = useState<GmailSyncRun | { status: "never_synced" } | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(true);
+
+  useEffect(() => {
+    loadGoogleStatus();
+  }, []);
+
+  const loadGoogleStatus = async () => {
+    try {
+      const [gs, ss] = await Promise.all([
+        api.getGoogleStatus(),
+        api.getGmailSyncStatus(),
+      ]);
+      setGoogleStatus(gs);
+      setSyncStatus(ss);
+    } catch {
+      // Google not configured or not connected — that's fine
+    } finally {
+      setGoogleLoading(false);
+    }
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,6 +56,33 @@ export function ProfilePage() {
       setEditing(false);
     } catch (err: any) {
       setError(err.message);
+    }
+  };
+
+  const handleConnectGoogle = () => {
+    window.location.href = "/api/integrations/google/connect/start";
+  };
+
+  const handleDisconnectGoogle = async () => {
+    try {
+      await api.disconnectGoogle();
+      setGoogleStatus({ connected: false, email: null, scopes: null, connectedAt: null });
+      setSyncStatus({ status: "never_synced" });
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
+  const handleSync = async () => {
+    setSyncing(true);
+    setError("");
+    try {
+      const result = await api.triggerGmailSync();
+      setSyncStatus(result);
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -101,6 +154,72 @@ export function ProfilePage() {
           </dl>
         )}
       </div>
+
+      {/* Google Account & Gmail Sync */}
+      {!googleLoading && (
+        <div className="card mt-4">
+          <div className="card-header">Google Account & Gmail Sync</div>
+
+          {googleStatus?.connected ? (
+            <>
+              <div className="flex justify-between items-center mb-4">
+                <div>
+                  <div className="text-sm">
+                    Connected as <strong>{googleStatus.email}</strong>
+                  </div>
+                  {googleStatus.connectedAt && (
+                    <div className="text-xs text-muted mt-1">
+                      Connected {new Date(googleStatus.connectedAt).toLocaleDateString()}
+                    </div>
+                  )}
+                </div>
+                <button
+                  className="btn text-xs"
+                  onClick={handleDisconnectGoogle}
+                  style={{ color: "#f85149" }}
+                >
+                  Disconnect
+                </button>
+              </div>
+
+              <div style={{ borderTop: "1px solid #30363d", paddingTop: 12 }}>
+                <div className="flex justify-between items-center">
+                  <div>
+                    <div className="text-sm font-medium">Gmail Sync</div>
+                    <div className="text-xs text-muted mt-1">
+                      {syncStatus && "status" in syncStatus
+                        ? syncStatus.status === "never_synced"
+                          ? "Never synced"
+                          : syncStatus.status === "success"
+                            ? `Last sync: ${(syncStatus as GmailSyncRun).messagesProcessed} messages processed`
+                            : syncStatus.status === "running"
+                              ? "Sync in progress..."
+                              : `Last sync failed: ${(syncStatus as GmailSyncRun).errorMessage || "Unknown error"}`
+                        : "Loading..."}
+                    </div>
+                  </div>
+                  <button
+                    className="btn btn-primary text-sm"
+                    onClick={handleSync}
+                    disabled={syncing}
+                  >
+                    {syncing ? "Syncing..." : "Sync Now"}
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div>
+              <p className="text-sm text-secondary mb-3">
+                Connect your Google account to automatically discover and rank your strongest relationships based on email interaction patterns.
+              </p>
+              <button className="btn btn-primary" onClick={handleConnectGoogle}>
+                Connect Google Account
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
