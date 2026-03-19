@@ -20,6 +20,7 @@ export const people = sqliteTable(
     id: integer("id").primaryKey({ autoIncrement: true }),
     name: text("name").notNull(),
     email: text("email"),
+    phone: text("phone"),
     bio: text("bio"),
     company: text("company"),
     school: text("school"),

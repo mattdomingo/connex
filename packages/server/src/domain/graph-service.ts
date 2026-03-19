@@ -276,6 +276,7 @@ export function searchPeople(
         id: p.id,
         name: locked ? redactName(p.name) : p.name,
         email: locked ? null : p.email,
+        phone: locked ? null : p.phone,
         bio: locked ? null : p.bio,
         company: locked ? null : p.company,
         school: locked ? null : p.school,

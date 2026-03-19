@@ -54,6 +54,7 @@ export default function GraphPage() {
   const [data, setData] = useState<GraphNeighborhood | null>(null);
   const [selected, setSelected] = useState<GraphNode | null>(null);
   const [selectedDetail, setSelectedDetail] = useState<Person | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
   const [path, setPath] = useState<PathResult | null>(null);
 
   const [searchQ, setSearchQ] = useState("");

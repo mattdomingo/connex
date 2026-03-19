@@ -17,6 +17,7 @@ export function applySchema(sqlite: Database.Database): void {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       email TEXT,
+      phone TEXT,
       bio TEXT,
       company TEXT,
       school TEXT,
@@ -183,6 +184,13 @@ export function applySchema(sqlite: Database.Database): void {
     sqlite.exec(
       "ALTER TABLE connections ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'",
     );
+  }
+  // people.phone column
+  const peopleCols = sqlite
+    .prepare("PRAGMA table_info(people)")
+    .all() as Array<{ name: string }>;
+  if (!peopleCols.some((c) => c.name === "phone")) {
+    sqlite.exec("ALTER TABLE people ADD COLUMN phone TEXT");
   }
 }
 

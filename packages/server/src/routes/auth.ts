@@ -130,6 +130,7 @@ export function registerAuthRoutes(app: FastifyInstance, db: DB) {
           id: person.id,
           name: person.name,
           email: person.email,
+          phone: person.phone,
           bio: person.bio,
           company: person.company,
           school: person.school,

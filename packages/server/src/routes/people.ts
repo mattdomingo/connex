@@ -9,6 +9,7 @@ import { listPeopleForAutocomplete } from "../domain/graph-service.js";
 const createSchema = z.object({
   name: z.string().min(1).max(100),
   email: z.string().email().optional(),
+  phone: z.string().max(40).optional(),
   bio: z.string().max(500).optional(),
   company: z.string().max(100).optional(),
   school: z.string().max(100).optional(),
@@ -20,6 +21,7 @@ function present(p: PersonRow) {
     id: p.id,
     name: p.name,
     email: p.email,
+    phone: p.phone,
     bio: p.bio,
     company: p.company,
     school: p.school,

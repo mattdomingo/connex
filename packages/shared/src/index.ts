@@ -25,6 +25,7 @@ export interface Person {
   id: number;
   name: string;
   email: string | null;
+  phone: string | null;
   bio: string | null;
   company: string | null;
   school: string | null;
@@ -136,6 +137,7 @@ export interface CreateInviteRequest {
 export interface CreatePersonRequest {
   name: string;
   email?: string;
+  phone?: string;
   bio?: string;
   company?: string;
   school?: string;
@@ -144,6 +146,7 @@ export interface CreatePersonRequest {
 
 export interface UpdateProfileRequest {
   name?: string;
+  phone?: string | null;
   bio?: string | null;
   company?: string | null;
   school?: string | null;
