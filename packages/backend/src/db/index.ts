@@ -1,4 +1,5 @@
 import { createDb, initializeSchema, getDbPath } from "./schema.js";
+import { initializeGmailSchema } from "./gmail-schema.js";
 import type Database from "better-sqlite3";
 
 let db: Database.Database | null = null;
@@ -7,6 +8,7 @@ export function getDb(): Database.Database {
   if (!db) {
     db = createDb();
     initializeSchema(db);
+    initializeGmailSchema(db);
   }
   return db;
 }
@@ -14,6 +16,7 @@ export function getDb(): Database.Database {
 export function getTestDb(): Database.Database {
   const testDb = createDb(":memory:");
   initializeSchema(testDb);
+  initializeGmailSchema(testDb);
   return testDb;
 }
 

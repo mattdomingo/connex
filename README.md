@@ -105,6 +105,10 @@ npm run test:watch -w packages/backend
 - **connections** -- Edges with type, closeness score, status (pending/accepted/rejected), created-by metadata
 - **invites** -- Invite codes with expiration, max uses, recipient metadata
 - **invite_redemptions** -- Tracks who redeemed which invite
+- **google_accounts** -- OAuth tokens (encrypted at rest) for linked Google accounts
+- **gmail_sync_runs** -- Sync job history with cursor for incremental sync
+- **email_interactions** -- Gmail metadata (no body content): message ID, direction, counterparty, timestamps
+- **relationship_scores** -- Computed tie-strength scores per user-person pair
 
 ### Key Constraints
 
@@ -158,3 +162,79 @@ Every graph node is a `person`. Registered users link to a person via `user_id`.
 | GET | /api/graph/explore | Yes | Get graph data (BFS from center) |
 | GET | /api/graph/path/:from/:to | Yes | Find shortest path |
 | GET | /api/graph/search?q= | Yes | Search with degree info |
+| GET | /api/integrations/google/connect/start | Yes | Redirect to Google OAuth consent |
+| GET | /api/integrations/google/connect/callback | No* | OAuth callback (state carries userId) |
+| POST | /api/integrations/google/disconnect | Yes | Remove linked Google account |
+| GET | /api/integrations/google/status | Yes | Check Google connection status |
+| POST | /api/gmail/sync | Yes | Trigger Gmail metadata sync + scoring |
+| GET | /api/gmail/sync/status | Yes | Latest sync run status |
+| GET | /api/me/top-connections?limit= | Yes | Ranked contacts by tie strength |
+| GET | /api/me/connections?company= | Yes | Filter ranked contacts by domain |
+| GET | /api/me/connections/:id/evidence | Yes | Interaction evidence for a person |
+
+## Connect Google & Gmail Sync
+
+### Setup
+
+1. Create a Google Cloud project and enable the Gmail API
+2. Create OAuth 2.0 credentials (Web application type)
+3. Add `http://localhost:3001/api/integrations/google/connect/callback` as an authorized redirect URI
+4. Set environment variables:
+
+```bash
+export GOOGLE_CLIENT_ID="your-client-id"
+export GOOGLE_CLIENT_SECRET="your-client-secret"
+export GOOGLE_REDIRECT_URI="http://localhost:3001/api/integrations/google/connect/callback"
+export GOOGLE_OAUTH_ENCRYPTION_KEY="any-random-secret-for-token-encryption"
+export GMAIL_BACKFILL_DAYS=180    # optional, default 180
+export GMAIL_BATCH_SIZE=100       # optional, default 100
+```
+
+### Usage
+
+```bash
+# 1. Sign in and get a token
+TOKEN=$(curl -s -X POST http://localhost:3001/api/auth/signin \
+  -H "Content-Type: application/json" \
+  -d '{"email":"alice@demo.com","password":"password123"}' | jq -r .token)
+
+# 2. Connect Google (opens browser)
+open "http://localhost:3001/api/integrations/google/connect/start?redirect=true"
+# (must be authenticated via cookie or pass token — use browser session)
+
+# 3. Trigger sync
+curl -X POST http://localhost:3001/api/gmail/sync \
+  -H "Authorization: Bearer $TOKEN"
+
+# 4. Get top connections
+curl http://localhost:3001/api/me/top-connections?limit=20 \
+  -H "Authorization: Bearer $TOKEN"
+
+# 5. Filter by company/domain
+curl "http://localhost:3001/api/me/connections?company=google.com" \
+  -H "Authorization: Bearer $TOKEN"
+
+# 6. Get evidence for a specific person
+curl http://localhost:3001/api/me/connections/42/evidence \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Tie-Strength Scoring Formula
+
+Each email interaction is weighted:
+- **Direct** (to/from): 1.0
+- **CC**: 0.3
+- **BCC**: 0.1
+
+Recency decay: `exp(-ln(2)/90 * days_ago)` (half-life of 90 days)
+
+Direction balance: `1 - |sent_fraction - 0.5| * 2` (rewards two-way communication)
+
+Final: `recency_weighted_sum * (0.5 + 0.5 * direction_balance)`, normalized to [0, 1] per user.
+
+### Security & Privacy
+
+- OAuth tokens are encrypted at rest using AES-256-GCM
+- No email body content is ever stored -- only metadata (from/to/cc, timestamps, thread IDs)
+- All Gmail-derived data is scoped to the owning user
+- Tokens are never logged

@@ -116,6 +116,53 @@ export function findPersonByEmail(
   return row ? mapPerson(row) : undefined;
 }
 
+/**
+ * Find any person by email (linked to a user or not).
+ * Used by Gmail identity mapping to avoid creating duplicate person nodes.
+ */
+export function findAnyPersonByEmail(
+  db: Database.Database,
+  email: string,
+): ApiPerson | undefined {
+  const row = db
+    .prepare("SELECT * FROM persons WHERE email = ? LIMIT 1")
+    .get(email) as any;
+  return row ? mapPerson(row) : undefined;
+}
+
+/**
+ * Find or create a person node for a given email.
+ * Used by Gmail ingestion for deterministic identity mapping.
+ * - Finds existing person by exact email match (any, not just unlinked).
+ * - If found, updates name/company if incoming data is higher quality (non-null replacing null).
+ * - If not found, creates a new person node.
+ */
+export function findOrCreatePersonByEmail(
+  db: Database.Database,
+  createdByUserId: number,
+  email: string,
+  name?: string | null,
+  domain?: string | null,
+): ApiPerson {
+  const existing = findAnyPersonByEmail(db, email);
+  if (existing) {
+    // Update if incoming data fills in missing fields
+    const updates: Record<string, string> = {};
+    if (name && !existing.name) updates.name = name;
+    if (domain && !existing.company) updates.company = domain;
+    if (Object.keys(updates).length > 0) {
+      updatePerson(db, existing.id, updates);
+    }
+    return getPersonById(db, existing.id)!;
+  }
+
+  return createPerson(db, createdByUserId, {
+    name: name || email.split("@")[0],
+    email,
+    company: domain ?? undefined,
+  });
+}
+
 function mapPerson(row: any): ApiPerson {
   return {
     id: row.id,

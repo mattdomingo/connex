@@ -169,6 +169,59 @@ export interface SearchResult {
   locked: boolean;
 }
 
+// ── Gmail / Integration Types ──
+
+export interface GoogleAccountStatus {
+  connected: boolean;
+  email: string | null;
+  scopes: string | null;
+  connectedAt: string | null;
+}
+
+export interface GmailSyncRun {
+  id: number;
+  userId: number;
+  status: "running" | "success" | "failed";
+  startedAt: string;
+  finishedAt: string | null;
+  messagesScanned: number;
+  messagesProcessed: number;
+  errorMessage: string | null;
+}
+
+export interface RankedConnection {
+  personId: number;
+  name: string;
+  email: string | null;
+  domain: string | null;
+  company: string | null;
+  tieStrength: number;
+  interactionCount: number;
+  sentCount: number;
+  receivedCount: number;
+  lastInteractionAt: string | null;
+}
+
+export interface InteractionEvidence {
+  personId: number;
+  name: string;
+  email: string | null;
+  totalInteractions: number;
+  sentCount: number;
+  receivedCount: number;
+  directCount: number;
+  ccCount: number;
+  lastInteractionAt: string | null;
+  firstInteractionAt: string | null;
+  recencyBuckets: {
+    last7days: number;
+    last30days: number;
+    last90days: number;
+    older: number;
+  };
+  topThreads: number;
+}
+
 // ── API Error ──
 
 export interface ApiError {
