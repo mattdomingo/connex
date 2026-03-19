@@ -20,6 +20,7 @@
     "better-sqlite3": "^11.5.0",
     "drizzle-orm": "^0.36.4",
     "fastify": "^4.28.1",
+    "googleapis": "^144.0.0",
     "jsonwebtoken": "^9.0.2",
     "nanoid": "^5.0.9",
     "zod": "^3.23.8"

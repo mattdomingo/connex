@@ -12,4 +12,21 @@ export const config = {
   corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:5173",
   cookieName: "connex_session",
   bootstrapInviteCode: process.env.BOOTSTRAP_INVITE ?? "CONNEX-BOOTSTRAP",
+
+  // --- Gmail OAuth / ingestion -------------------------------------------
+  google: {
+    clientId: process.env.GOOGLE_CLIENT_ID ?? "",
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
+    redirectUri:
+      process.env.GOOGLE_REDIRECT_URI ??
+      "http://localhost:3001/api/gmail/callback",
+  },
+  // 32-byte key, hex-encoded (64 chars). Used for AES-256-GCM token-at-rest.
+  encryptionKeyHex:
+    process.env.ENCRYPTION_KEY ??
+    "0000000000000000000000000000000000000000000000000000000000000000",
+  gmail: {
+    initialLookbackDays: Number(process.env.GMAIL_LOOKBACK_DAYS ?? 730),
+    maxMessagesPerSync: Number(process.env.GMAIL_MAX_PER_SYNC ?? 2000),
+  },
 };

@@ -82,7 +82,80 @@ export function applySchema(sqlite: Database.Database): void {
       user_id INTEGER NOT NULL REFERENCES users(id),
       redeemed_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+
+    -- --- Gmail ingestion ---------------------------------------------------
+
+    CREATE TABLE IF NOT EXISTS gmail_accounts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      gmail_address TEXT NOT NULL,
+      refresh_token_enc TEXT NOT NULL,
+      access_token_enc TEXT,
+      access_token_expires_at TEXT,
+      scope TEXT NOT NULL,
+      last_synced_at TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS gmail_accounts_user_uq
+      ON gmail_accounts(user_id);
+
+    CREATE TABLE IF NOT EXISTS email_metadata (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      message_id TEXT NOT NULL,
+      thread_id TEXT NOT NULL,
+      from_addr TEXT NOT NULL,
+      to_addrs TEXT NOT NULL DEFAULT '[]',
+      cc_addrs TEXT NOT NULL DEFAULT '[]',
+      date TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS email_metadata_user_msg_uq
+      ON email_metadata(user_id, message_id);
+    CREATE INDEX IF NOT EXISTS email_metadata_user_date_idx
+      ON email_metadata(user_id, date);
+
+    CREATE TABLE IF NOT EXISTS identity_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      email TEXT NOT NULL,
+      display_name TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT 'gmail',
+      first_seen_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      person_id INTEGER REFERENCES people(id),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS identity_records_user_email_uq
+      ON identity_records(user_id, email);
+
+    CREATE TABLE IF NOT EXISTS relationship_edges (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id),
+      identity_id INTEGER NOT NULL REFERENCES identity_records(id),
+      tie_strength_score REAL NOT NULL
+        CHECK (tie_strength_score >= 0.0 AND tie_strength_score <= 1.0),
+      email_count INTEGER NOT NULL,
+      thread_count INTEGER NOT NULL,
+      last_interaction_at TEXT NOT NULL,
+      direction TEXT NOT NULL
+        CHECK (direction IN ('sent','received','bidirectional')),
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS relationship_edges_user_identity_uq
+      ON relationship_edges(user_id, identity_id);
   `);
+
+  // --- Lightweight migrations for pre-existing databases --------------------
+  // connections.source column (provenance tag for gmail-derived edges)
+  const connCols = sqlite
+    .prepare("PRAGMA table_info(connections)")
+    .all() as Array<{ name: string }>;
+  if (!connCols.some((c) => c.name === "source")) {
+    sqlite.exec(
+      "ALTER TABLE connections ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'",
+    );
+  }
 }
 
 let _db: DB | null = null;

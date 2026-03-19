@@ -144,6 +144,72 @@ Per-package scripts are available under `npm run <script> -w @connex/<pkg>`.
 | GET    | `/graph/explore?degree=N`   | ✓    | BFS neighborhood + entitlement mask|
 | GET    | `/graph/path?to=ID`         | ✓    | Shortest path viewer→target        |
 | GET    | `/graph/search?q=&...`      | ✓    | Degree-scoped people search        |
+| GET    | `/gmail/status`             | ✓    | Connected account + last sync      |
+| GET    | `/gmail/connect`            | ✓    | Begin Google OAuth redirect        |
+| GET    | `/gmail/callback`           |      | OAuth code exchange (state-checked)|
+| POST   | `/gmail/sync`               | ✓    | Ingest metadata → score → bridge   |
+| POST   | `/gmail/revoke`             | ✓    | Disconnect + purge all Gmail data  |
+
+---
+
+## Gmail relationship ingestion
+
+Connex can infer relationship edges from Gmail message **envelopes** (From / To
+/ Cc / Date only — no subjects, no bodies, ever). Ingested contacts appear as
+first-degree `other` connections in the graph with a trust score derived from
+email volume, recency, thread count, and direction.
+
+### Environment variables
+
+| Var                     | Required | Default                                              | Purpose                                  |
+| ----------------------- | -------- | ---------------------------------------------------- | ---------------------------------------- |
+| `GOOGLE_CLIENT_ID`      | yes¹     |                                                      | OAuth client ID                          |
+| `GOOGLE_CLIENT_SECRET`  | yes¹     |                                                      | OAuth client secret                      |
+| `GOOGLE_REDIRECT_URI`   | no       | `http://localhost:3001/api/gmail/callback`           | Must match the console redirect URI      |
+| `ENCRYPTION_KEY`        | yes¹     | all-zero dev key                                     | 64-hex-char AES-256-GCM key for tokens   |
+| `GMAIL_LOOKBACK_DAYS`   | no       | `730`                                                | Window for the first full sync           |
+| `GMAIL_MAX_PER_SYNC`    | no       | `2000`                                               | Hard cap on message fetches per sync     |
+
+¹ Required to connect a real Google account. Tests mock the OAuth exchange and
+Gmail API, so `npm run test` works without any of these set.
+
+Generate an `ENCRYPTION_KEY` with:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+### Google Cloud setup (once)
+
+1. Create a project and enable the **Gmail API**.
+2. Create an **OAuth 2.0 Client ID** (type: Web application).
+3. Add `http://localhost:3001/api/gmail/callback` as an authorized redirect URI.
+4. Put the client ID/secret in `packages/server/.env`.
+
+### Flow
+
+```
+/gmail/connect ─▶ Google consent ─▶ /gmail/callback ─▶ tokens encrypted at rest
+                                                        └─▶ gmail_accounts row
+
+/gmail/sync ──▶ list + get format=metadata ──▶ email_metadata (dedupe by msg-id)
+                                              └─▶ identity_records (per unique email)
+                                              └─▶ relationship_edges (scored 0..1)
+                                              └─▶ connections (type="other", trust 1..10)
+```
+
+- **Sync state:** first sync pulls 2 years; later syncs use `last_synced_at`.
+- **Idempotent:** `(user_id, message_id)` is unique; edges are fully recomputed
+  from stored metadata on each run, so repeat syncs do not drift.
+- **Tie-strength score:** weighted sum of log-volume, distinct threads, 60-day
+  half-life recency, and direction (bidirectional > one-way). Mapped to
+  `trust_score = round(1 + 9·score)`.
+- **Bridging:** Gmail contacts become `people` rows and `connections` rows with
+  `source="gmail"`. Existing manual edges of type `other` are never overwritten.
+- **Revoke:** deletes the user's `gmail_accounts`, `email_metadata`,
+  `identity_records`, `relationship_edges`, and all `connections` where
+  `source="gmail"` and `created_by_user_id = you`. Other users' data is
+  untouched.
 
 ---
 
@@ -158,12 +224,25 @@ Per-package scripts are available under `npm run <script> -w @connex/<pkg>`.
 | Edge rules / confirmation | `packages/server/src/domain/connections.ts`    |
 | Schema                    | `packages/server/src/db/schema.ts`             |
 | Seed data                 | `packages/server/src/db/seed.ts`               |
+| Token encryption at rest  | `packages/server/src/crypto.ts`                |
+| Gmail address parsing     | `packages/server/src/domain/gmail/identity.ts` |
+| Tie-strength scoring      | `packages/server/src/domain/gmail/scoring.ts`  |
+| Metadata ingest pipeline  | `packages/server/src/domain/gmail/ingest.ts`   |
+| Edges → connections bridge| `packages/server/src/domain/gmail/bridge.ts`   |
+| Revoke + purge            | `packages/server/src/domain/gmail/revoke.ts`   |
 
 ## Tests
 
-38 tests covering:
+83 tests covering:
 
 - `graph.test.ts` — adjacency build (pending/rejected exclusion), BFS degrees, shortest path (multi-hop, unreachable, competing paths, pending-edge exclusion), neighborhood subgraph extraction
 - `invites.test.ts` — creation defaults, maxUses clamping, expiry, revoked/exhausted/expired validation, redemption counter
 - `entitlement.test.ts` — tier → max-degree mapping, neighborhood masking (free locks 3°, premium doesn't), path masking redacts intermediaries
 - `connections.test.ts` — self-edge rejection, trust range, duplicate detection (order-independent), pending-vs-active lifecycle based on endpoint registration, confirmer-only accept, rejection permits retry
+- `gmail/identity.test.ts` — `Name <email>` / quoted / bare parsing, list split (handles quoted commas), local-part name derivation
+- `gmail/scoring.test.ts` — direction classification, bidirectional > one-way, volume/recency/thread monotonicity, clamping, 0..1 → 1..10 trust mapping
+- `gmail/crypto.test.ts` — AES-256-GCM roundtrip, random IV, wrong-key failure, key-length validation
+- `gmail/ingest.test.ts` — schema proves no subject/body columns, identity set excludes self, direction attribution, idempotency across runs (row counts + scores stable)
+- `gmail/oauth.test.ts` — callback exchanges code, ciphertext ≠ plaintext, decrypt recovers token, invalid state → 400, `/connect` requires auth, `/status` before/after
+- `gmail/revoke.test.ts` — full purge of user A, user B untouched
+- `gmail/graph-regression.test.ts` — `/api/graph/explore` and `/api/graph/path` reflect Gmail-bridged edges as `relationshipType="other"`

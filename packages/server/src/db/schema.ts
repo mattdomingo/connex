@@ -2,6 +2,7 @@ import {
   sqliteTable,
   integer,
   text,
+  real,
   uniqueIndex,
   index,
   check,
@@ -100,6 +101,9 @@ export const connections = sqliteTable(
       .notNull()
       .references(() => users.id),
     confirmRequiredFromPersonId: integer("confirm_required_from_person_id"),
+    // Provenance: where this edge came from. "manual" (user-created) or
+    // "gmail" (ingestion). Used for targeted cleanup on revoke.
+    source: text("source").notNull().default("manual"),
     createdAt: text("created_at")
       .notNull()
       .default(sql`(datetime('now'))`),
@@ -161,9 +165,144 @@ export const inviteRedemptions = sqliteTable("invite_redemptions", {
     .default(sql`(datetime('now'))`),
 });
 
+// ---------------------------------------------------------------------------
+// Gmail OAuth accounts — one per Connex user.
+// Tokens are encrypted (AES-256-GCM) before storage; only ciphertext lives here.
+// ---------------------------------------------------------------------------
+
+export const gmailAccounts = sqliteTable(
+  "gmail_accounts",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id),
+    gmailAddress: text("gmail_address").notNull(),
+    // Encrypted refresh token (base64-encoded iv:ciphertext:tag)
+    refreshTokenEnc: text("refresh_token_enc").notNull(),
+    // Encrypted access token (optional cache; can be refreshed from refresh_token)
+    accessTokenEnc: text("access_token_enc"),
+    accessTokenExpiresAt: text("access_token_expires_at"),
+    scope: text("scope").notNull(),
+    lastSyncedAt: text("last_synced_at"),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+  },
+  (t) => ({
+    userUq: uniqueIndex("gmail_accounts_user_uq").on(t.userId),
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// email_metadata — envelope fields ONLY. No subject, no body, no other headers.
+// Deduped per (user_id, message_id).
+// ---------------------------------------------------------------------------
+
+export const emailMetadata = sqliteTable(
+  "email_metadata",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id),
+    messageId: text("message_id").notNull(), // Gmail message id
+    threadId: text("thread_id").notNull(),
+    fromAddr: text("from_addr").notNull(),
+    // to/cc stored as JSON arrays of "Name <email>" strings — no parsing here,
+    // identity upsert handles parsing.
+    toAddrs: text("to_addrs").notNull().default("[]"),
+    ccAddrs: text("cc_addrs").notNull().default("[]"),
+    date: text("date").notNull(), // ISO8601
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+  },
+  (t) => ({
+    userMsgUq: uniqueIndex("email_metadata_user_msg_uq").on(
+      t.userId,
+      t.messageId,
+    ),
+    userDateIdx: index("email_metadata_user_date_idx").on(t.userId, t.date),
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// identity_records — unique email addresses observed per user.
+// Scoped to a user so revoke can delete their view without touching others.
+// ---------------------------------------------------------------------------
+
+export const identityRecords = sqliteTable(
+  "identity_records",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id),
+    email: text("email").notNull(),
+    displayName: text("display_name").notNull(),
+    source: text("source").notNull().default("gmail"),
+    firstSeenAt: text("first_seen_at").notNull(),
+    lastSeenAt: text("last_seen_at").notNull(),
+    // Link to the people table (graph node) — set when bridged.
+    personId: integer("person_id").references(() => people.id),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+  },
+  (t) => ({
+    userEmailUq: uniqueIndex("identity_records_user_email_uq").on(
+      t.userId,
+      t.email,
+    ),
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// relationship_edges — computed tie strengths between the user and each
+// identity. Recomputed on sync; safe to delete & rebuild.
+// ---------------------------------------------------------------------------
+
+export const relationshipEdges = sqliteTable(
+  "relationship_edges",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    userId: integer("user_id")
+      .notNull()
+      .references(() => users.id),
+    identityId: integer("identity_id")
+      .notNull()
+      .references(() => identityRecords.id),
+    tieStrengthScore: real("tie_strength_score").notNull(),
+    emailCount: integer("email_count").notNull(),
+    threadCount: integer("thread_count").notNull(),
+    lastInteractionAt: text("last_interaction_at").notNull(),
+    direction: text("direction", {
+      enum: ["sent", "received", "bidirectional"],
+    }).notNull(),
+    createdAt: text("created_at")
+      .notNull()
+      .default(sql`(datetime('now'))`),
+  },
+  (t) => ({
+    userIdentUq: uniqueIndex("relationship_edges_user_identity_uq").on(
+      t.userId,
+      t.identityId,
+    ),
+    scoreCheck: check(
+      "relationship_edges_score_range",
+      sql`${t.tieStrengthScore} >= 0.0 AND ${t.tieStrengthScore} <= 1.0`,
+    ),
+  }),
+);
+
 // --- Inferred types ---------------------------------------------------------
 
 export type PersonRow = typeof people.$inferSelect;
 export type UserRow = typeof users.$inferSelect;
 export type ConnectionRow = typeof connections.$inferSelect;
 export type InviteRow = typeof invites.$inferSelect;
+export type GmailAccountRow = typeof gmailAccounts.$inferSelect;
+export type EmailMetadataRow = typeof emailMetadata.$inferSelect;
+export type IdentityRecordRow = typeof identityRecords.$inferSelect;
+export type RelationshipEdgeRow = typeof relationshipEdges.$inferSelect;
