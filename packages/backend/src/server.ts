@@ -1,4 +1,11 @@
-import "dotenv/config";
+import { config } from "dotenv";
+import { resolve, dirname } from "path";
+import { fileURLToPath } from "url";
+
+// Load .env from monorepo root (two levels up from packages/backend/src/)
+const __dirname = dirname(fileURLToPath(import.meta.url));
+config({ path: resolve(__dirname, "../../../.env") });
+
 import express from "express";
 import cors from "cors";
 import { getDb, closeDb } from "./db/index.js";
