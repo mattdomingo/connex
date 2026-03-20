@@ -105,46 +105,36 @@ describe("Graph exploration with degree gating", () => {
     db = setupTestDb();
   });
 
-  it("returns only 1st degree nodes unlocked with free policy (maxDegree=1)", () => {
+  it("returns up to 3rd degree nodes unlocked with free policy (maxDegree=3)", () => {
     const graph = getGraphForPerson(db, 1, FREE_POLICY);
 
-    // Free policy: max degree 1
+    // Free policy: max degree 3
     const unlocked = graph.nodes.filter((n) => !n.locked);
     const locked = graph.nodes.filter((n) => n.locked);
 
-    // Degree 0: Alice. Degree 1: Bob. Degree 2: Carol, Frank (locked boundary)
+    // Degree 0: Alice. Degree 1: Bob. Degree 2: Carol, Frank. Degree 3: Dave, Grace.
     expect(unlocked.map((n) => n.name).sort()).toEqual(
-      ["Alice", "Bob"].sort()
+      ["Alice", "Bob", "Carol", "Dave", "Frank", "Grace"].sort()
     );
 
-    // Degree 2 nodes should be locked
+    // Eve is at degree 4, locked at the boundary
     for (const node of locked) {
       expect(node.locked).toBe(true);
       expect(node.name).toBe("Locked");
-      expect(node.degree).toBe(2);
+      expect(node.degree).toBe(4);
     }
   });
 
-  it("returns up to 3rd degree nodes unlocked with premium policy (maxDegree=3)", () => {
+  it("returns all nodes unlocked with premium policy (maxDegree=6)", () => {
     const graph = getGraphForPerson(db, 1, PREMIUM_POLICY);
 
     const unlocked = graph.nodes.filter((n) => !n.locked);
     const locked = graph.nodes.filter((n) => n.locked);
 
-    // Degrees 0-3 unlocked: Alice(0), Bob(1), Carol(2), Frank(2), Dave(3), Grace(3)
+    // All 7 nodes unlocked (max degree in test graph is 4, premium allows 6)
     const names = unlocked.map((n) => n.name).sort();
-    expect(names).toContain("Alice");
-    expect(names).toContain("Bob");
-    expect(names).toContain("Carol");
-    expect(names).toContain("Frank");
-    expect(names).toContain("Dave");
-    expect(names).toContain("Grace");
-
-    // Eve is at degree 4 — locked
-    for (const node of locked) {
-      expect(node.locked).toBe(true);
-      expect(node.degree).toBe(4);
-    }
+    expect(names).toEqual(["Alice", "Bob", "Carol", "Dave", "Eve", "Frank", "Grace"]);
+    expect(locked).toHaveLength(0);
   });
 
   it("includes pending edges in data but not in degree computation", () => {
@@ -158,9 +148,9 @@ describe("Graph exploration with degree gating", () => {
 
     // Dave should still be degree 3, not degree 1 (pending doesn't count)
     const dave = graph.nodes.find((n) => n.id === 4);
-    // Dave is at degree 3, so locked under free policy
+    // Dave is at degree 3, which is within free policy (maxDegree=3) — unlocked
     if (dave) {
-      expect(dave.locked).toBe(true);
+      expect(dave.locked).toBe(false);
       expect(dave.degree).toBe(3);
     }
   });
@@ -215,8 +205,8 @@ describe("Shortest path", () => {
   });
 
   it("marks path as locked when it passes through gated nodes", () => {
-    // Path from A to D is 3 degrees; free policy allows 2
-    const result = findShortestPath(db, 1, 4, 1, FREE_POLICY);
+    // Path from A to E is 4 degrees; free policy allows 3
+    const result = findShortestPath(db, 1, 5, 1, FREE_POLICY);
     expect(result).not.toBeNull();
     expect(result!.locked).toBe(true);
   });

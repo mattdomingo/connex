@@ -34,6 +34,8 @@ interface Props {
   selectedNodeId: number | null;
   pathNodeIds: Set<number> | null;
   pathEdgeIds: Set<number> | null;
+  introNodeIds?: Set<number> | null;
+  introEdgePairs?: Set<string> | null;
 }
 
 export function GraphVisualization({
@@ -42,6 +44,8 @@ export function GraphVisualization({
   selectedNodeId,
   pathNodeIds,
   pathEdgeIds,
+  introNodeIds,
+  introEdgePairs,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<any>(null);
@@ -107,6 +111,7 @@ export function GraphVisualization({
     (node: any) => {
       if (node.locked) return "rgba(110, 118, 129, 0.3)";
       if (pathNodeIds?.has(node.id)) return "#f0883e";
+      if (introNodeIds?.has(node.id)) return "#f0883e";
       if (node.id === selectedNodeId) return "#f0883e";
       if (node.isCenter) return "#f0883e";
       if (node.isUser) return "#58a6ff";
@@ -115,7 +120,7 @@ export function GraphVisualization({
       if (node.tieStrength != null) return "#8b949e";
       return "#8b949e";
     },
-    [selectedNodeId, pathNodeIds]
+    [selectedNodeId, pathNodeIds, introNodeIds]
   );
 
   const nodeSize = useCallback(
@@ -123,33 +128,47 @@ export function GraphVisualization({
       if (node.isCenter) return 8;
       if (node.locked) return 3;
       if (pathNodeIds?.has(node.id)) return 7;
+      if (introNodeIds?.has(node.id)) return 7;
       if (node.id === selectedNodeId) return 7;
       // Scale by tie strength: 3-7 range
       if (node.tieStrength != null) return 3 + node.tieStrength * 4;
       return 5;
     },
-    [selectedNodeId, pathNodeIds]
+    [selectedNodeId, pathNodeIds, introNodeIds]
+  );
+
+  const isIntroEdge = useCallback(
+    (link: any) => {
+      if (!introEdgePairs || introEdgePairs.size === 0) return false;
+      const srcId = typeof link.source === "object" ? link.source.id : link.source;
+      const tgtId = typeof link.target === "object" ? link.target.id : link.target;
+      const key = `${Math.min(srcId, tgtId)},${Math.max(srcId, tgtId)}`;
+      return introEdgePairs.has(key);
+    },
+    [introEdgePairs]
   );
 
   const linkColor = useCallback(
     (link: any) => {
       if (pathEdgeIds?.has(link.id)) return "#f0883e";
+      if (isIntroEdge(link)) return "#f0883e";
       if (link.status === "pending") return "rgba(210, 153, 34, 0.4)";
       return edgeColorWithIntensity(link.relationshipType, link.tieStrength);
     },
-    [pathEdgeIds]
+    [pathEdgeIds, isIntroEdge]
   );
 
   const linkWidth = useCallback(
     (link: any) => {
       if (pathEdgeIds?.has(link.id)) return 4;
+      if (isIntroEdge(link)) return 4;
       if (link.tieStrength != null) {
         // Primary strength differentiator: thickness 0.5-6
         return 0.5 + link.tieStrength * 5.5;
       }
       return 1.5;
     },
-    [pathEdgeIds]
+    [pathEdgeIds, isIntroEdge]
   );
 
   const linkDashArray = useCallback((link: any) => {
@@ -177,7 +196,7 @@ export function GraphVisualization({
       ctx.fillStyle = color;
       ctx.fill();
 
-      if (node.id === selectedNodeId || pathNodeIds?.has(node.id) || node.isCenter) {
+      if (node.id === selectedNodeId || pathNodeIds?.has(node.id) || introNodeIds?.has(node.id) || node.isCenter) {
         ctx.strokeStyle = "#f0883e";
         ctx.lineWidth = 2 / globalScale;
         ctx.stroke();
@@ -192,7 +211,7 @@ export function GraphVisualization({
         ctx.fillText(node.name, node.x, node.y + size + 2);
       }
     },
-    [nodeSize, nodeColor, selectedNodeId, pathNodeIds, labelColor]
+    [nodeSize, nodeColor, selectedNodeId, pathNodeIds, introNodeIds, labelColor]
   );
 
   return (

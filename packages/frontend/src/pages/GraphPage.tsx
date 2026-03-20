@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import type { GraphData, GraphNode, ShortestPathResult } from "@connex/shared";
 import { useAuth } from "../hooks/useAuth.js";
+import { useIntroPath } from "../hooks/useIntroPath.js";
 import * as api from "../api/client.js";
 import { GraphVisualization } from "../components/GraphVisualization.js";
 import { PersonPanel } from "../components/PersonPanel.js";
@@ -8,6 +9,7 @@ import { PathDisplay } from "../components/PathDisplay.js";
 
 export function GraphPage() {
   const { person } = useAuth();
+  const { allNodeIds: introNodeIds, allEdgePairs: introEdgePairs, hasPath: hasIntroPath, clearIntroPath } = useIntroPath();
   const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [pathResult, setPathResult] = useState<ShortestPathResult | null>(null);
@@ -67,7 +69,7 @@ export function GraphPage() {
         <div>
           <h1 className="page-title">Graph Explorer</h1>
           <p className="page-subtitle">
-            Explore your relationship network. 3rd-degree+ connections are locked.
+            Explore your relationship network. Connections beyond your plan's degree limit are locked.
           </p>
         </div>
         {graphData && graphData.centerPersonId !== person?.id && (
@@ -88,11 +90,23 @@ export function GraphPage() {
               selectedNodeId={selectedNode?.id ?? null}
               pathNodeIds={pathResult ? new Set(pathResult.path.map((n) => n.id)) : null}
               pathEdgeIds={pathResult ? new Set(pathResult.edges.map((e) => e.id)) : null}
+              introNodeIds={hasIntroPath ? introNodeIds : null}
+              introEdgePairs={hasIntroPath ? introEdgePairs : null}
             />
           )}
         </div>
 
         <div style={{ width: 320, flexShrink: 0, overflowY: "auto" }}>
+          {hasIntroPath && !pathResult && (
+            <div className="card mb-4" style={{ background: "rgba(240, 136, 62, 0.1)", border: "1px solid rgba(240, 136, 62, 0.3)" }}>
+              <div className="flex justify-between items-center">
+                <div className="text-sm" style={{ color: "#f0883e", fontWeight: 500 }}>Intro path highlighted</div>
+                <button className="btn text-xs" style={{ padding: "2px 8px" }} onClick={clearIntroPath}>Dismiss</button>
+              </div>
+              <p className="text-xs text-muted mt-1">The introduction chain you built is highlighted on the graph.</p>
+            </div>
+          )}
+
           {pathResult && (
             <PathDisplay path={pathResult} onClose={() => { setPathResult(null); setPathTarget(null); }} />
           )}
@@ -125,7 +139,7 @@ export function GraphPage() {
                 </div>
                 <div className="legend-item">
                   <span className="legend-dot" style={{ background: "var(--text-muted)", opacity: 0.4 }} />
-                  <span className="text-xs">Locked (3rd degree+)</span>
+                  <span className="text-xs">Locked (beyond degree limit)</span>
                 </div>
                 <div className="legend-item mt-2">
                   <span className="text-xs text-muted">Dashed lines = pending connections</span>

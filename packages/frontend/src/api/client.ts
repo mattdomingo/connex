@@ -150,8 +150,10 @@ export interface NextHopsResponse {
   hops: NextHopOption[];
 }
 
-export const getNextHops = (fromId: number, targetId: number) =>
-  request<NextHopsResponse>(`/graph/next-hops/${fromId}/${targetId}`);
+export const getNextHops = (fromId: number, targetId: number, exclude?: number[]) => {
+  const qs = exclude && exclude.length > 0 ? `?exclude=${exclude.join(",")}` : "";
+  return request<NextHopsResponse>(`/graph/next-hops/${fromId}/${targetId}${qs}`);
+};
 
 // Google / Gmail
 export const getGoogleStatus = () =>

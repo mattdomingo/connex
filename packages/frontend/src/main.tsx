@@ -5,6 +5,7 @@ import { App } from "./App.js";
 import { AuthProvider } from "./hooks/useAuth.js";
 import { SyncStatusProvider } from "./hooks/useSyncStatus.js";
 import { ThemeProvider } from "./hooks/useTheme.js";
+import { IntroPathProvider } from "./hooks/useIntroPath.js";
 import "./styles.css";
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
@@ -13,7 +14,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       <ThemeProvider>
         <AuthProvider>
           <SyncStatusProvider>
-            <App />
+            <IntroPathProvider>
+              <App />
+            </IntroPathProvider>
           </SyncStatusProvider>
         </AuthProvider>
       </ThemeProvider>

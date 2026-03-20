@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import type { ApiIntroRequest } from "@connex/shared";
 import { useAuth } from "../hooks/useAuth.js";
+import { useIntroPath } from "../hooks/useIntroPath.js";
 import * as api from "../api/client.js";
 import type { ReachablePerson, IntermediaryOption, NextHopOption } from "../api/client.js";
 
@@ -17,6 +18,8 @@ interface ChainHop {
 export function IntroductionsPage() {
   const { person } = useAuth();
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const { setIntroPath, clearIntroPath } = useIntroPath();
   const [tab, setTab] = useState<Tab>(searchParams.get("tab") as Tab || "create");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -85,6 +88,26 @@ export function IntroductionsPage() {
     setChain([]);
     setNextHopOptions([]);
     setChainComplete(false);
+    clearIntroPath();
+  };
+
+  // Build the exclude list for next-hops (all chain node IDs + self)
+  const buildExclude = (currentChain: ChainHop[]) => {
+    const ids = [person?.id, ...currentChain.map((h) => h.id)].filter((n): n is number => n != null);
+    return ids;
+  };
+
+  // Sync chain to the intro path context for graph highlighting
+  const syncToContext = (newChain: ChainHop[], complete: boolean) => {
+    if (!person || !selectedTarget) return;
+    const chainForCtx = complete
+      ? newChain.filter((h) => h.id !== selectedTarget.id) // remove target from chain if it's last
+      : newChain;
+    setIntroPath({
+      fromId: person.id,
+      target: complete ? { id: selectedTarget.id, name: selectedTarget.name } : null,
+      chain: chainForCtx.map((h) => ({ id: h.id, name: h.name })),
+    });
   };
 
   // When a hop is selected, load next hops
@@ -98,27 +121,34 @@ export function IntroductionsPage() {
     if (hop.id === selectedTarget.id) {
       setChainComplete(true);
       setNextHopOptions([]);
+      syncToContext(newChain, true);
       return;
     }
 
-    // Load next hops from this node toward the target
+    // Load next hops from this node toward the target, excluding chain nodes
     setLoadingNextHops(true);
     try {
-      const resp = await api.getNextHops(hop.id, selectedTarget.id);
+      const exclude = buildExclude(newChain);
+      const resp = await api.getNextHops(hop.id, selectedTarget.id, exclude);
       if (resp.hops.length === 0) {
         setChainComplete(true);
+        syncToContext(newChain, true);
       } else {
         setNextHopOptions(resp.hops);
+        syncToContext(newChain, false);
         // If the only option is the target, auto-complete
         if (resp.hops.length === 1 && resp.hops[0].isTarget) {
           const targetHop = resp.hops[0];
-          setChain([...newChain, { id: targetHop.id, name: targetHop.name, email: targetHop.email, company: targetHop.company }]);
+          const finalChain = [...newChain, { id: targetHop.id, name: targetHop.name, email: targetHop.email, company: targetHop.company }];
+          setChain(finalChain);
           setChainComplete(true);
           setNextHopOptions([]);
+          syncToContext(finalChain, true);
         }
       }
     } catch {
       setChainComplete(true);
+      syncToContext(newChain, true);
     } finally {
       setLoadingNextHops(false);
     }
@@ -134,13 +164,16 @@ export function IntroductionsPage() {
     if (newChain.length === 0) {
       // Back to first hop selection — intermediaries are already loaded
       setNextHopOptions([]);
+      syncToContext([], false);
     } else if (selectedTarget) {
       const lastHop = newChain[newChain.length - 1];
       setLoadingNextHops(true);
-      api.getNextHops(lastHop.id, selectedTarget.id)
+      const exclude = buildExclude(newChain);
+      api.getNextHops(lastHop.id, selectedTarget.id, exclude)
         .then((resp) => setNextHopOptions(resp.hops))
         .catch(() => setNextHopOptions([]))
         .finally(() => setLoadingNextHops(false));
+      syncToContext(newChain, false);
     }
   };
 
@@ -178,7 +211,7 @@ export function IntroductionsPage() {
       });
       setSuccess("Intro request sent!");
       setSelectedTarget(null);
-      resetChain();
+      resetChain(); // also clears intro path context
       setRequestNote("");
       setTargetFilter("");
     } catch (err: any) {
@@ -508,13 +541,24 @@ export function IntroductionsPage() {
               />
             </div>
 
-            <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={!selectedTarget || chain.length === 0 || submitting}
-            >
-              {submitting ? "Sending..." : "Send Intro Request"}
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={!selectedTarget || chain.length === 0 || submitting}
+              >
+                {submitting ? "Sending..." : "Send Intro Request"}
+              </button>
+              {chainComplete && chain.length > 0 && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => navigate("/graph")}
+                >
+                  View in Graph
+                </button>
+              )}
+            </div>
           </form>
         </div>
       )}

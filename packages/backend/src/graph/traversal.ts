@@ -45,7 +45,7 @@ export const FREE_POLICY: EntitlementPolicy = {
 };
 
 export const PREMIUM_POLICY: EntitlementPolicy = {
-  maxDegree: 3,
+  maxDegree: 6,
 };
 
 /**
@@ -87,45 +87,58 @@ export function getGraphForPerson(
     }
   }
 
-  // Gmail-derived contacts: if viewing user's own graph, merge scored contacts
-  interface ScoredContact { person_id: number; tie_strength: number }
-  let scoredContacts: ScoredContact[] = [];
+  // Gmail-derived contacts: merge scored contacts for ALL discovered registered
+  // users, not just the center. This enables merged-network visibility — e.g.
+  // Alice sees Matthew's Gmail contacts on her own graph without re-centering.
+  interface ScoredContact { person_id: number; tie_strength: number; owner_person_id: number }
+  const allScoredContacts: ScoredContact[] = [];
 
-  // Show Gmail contacts for the center person regardless of who is viewing.
-  // This enables bidirectional visibility: if Alice and Matthew are connected,
-  // Alice can see Matthew's Gmail contacts when she re-centers on him.
-  {
-    const centerPerson = db
-      .prepare("SELECT user_id FROM persons WHERE id = ?")
-      .get(centerPersonId) as { user_id: number | null } | undefined;
+  // Find all discovered persons that are registered users
+  const discoveredUserIds: { personId: number; userId: number }[] = [];
+  if (personIds.size > 0) {
+    const placeholders = [...personIds].map(() => "?").join(",");
+    const userPersons = db
+      .prepare(`SELECT id, user_id FROM persons WHERE id IN (${placeholders}) AND user_id IS NOT NULL`)
+      .all(...personIds) as { id: number; user_id: number }[];
+    for (const p of userPersons) {
+      discoveredUserIds.push({ personId: p.id, userId: p.user_id });
+    }
+  }
 
-    if (centerPerson && centerPerson.user_id != null) {
-      const centerUserId = centerPerson.user_id;
-      scoredContacts = db
-        .prepare(
-          `SELECT rs.person_id, rs.tie_strength
-           FROM relationship_scores rs
-           WHERE rs.user_id = ?
-             AND rs.tie_strength >= ?
-             AND rs.person_id NOT IN (SELECT person_id FROM hidden_contacts WHERE user_id = ?)
-           ORDER BY rs.tie_strength DESC
-           LIMIT ?`,
-        )
-        .all(centerUserId, GMAIL_GRAPH_MIN_STRENGTH, centerUserId, GMAIL_GRAPH_LIMIT) as ScoredContact[];
+  // Per-user limit to prevent one user's contacts from crowding
+  const perUserLimit = Math.max(10, Math.floor(GMAIL_GRAPH_LIMIT / Math.max(discoveredUserIds.length, 1)));
 
-      for (const sc of scoredContacts) {
-        personIds.add(sc.person_id);
-        if (!degrees.has(sc.person_id)) {
-          degrees.set(sc.person_id, 1); // gmail contacts are 1st-degree from center
-        }
+  for (const { personId: ownerPersonId, userId } of discoveredUserIds) {
+    const contacts = db
+      .prepare(
+        `SELECT rs.person_id, rs.tie_strength
+         FROM relationship_scores rs
+         WHERE rs.user_id = ?
+           AND rs.tie_strength >= ?
+           AND rs.person_id NOT IN (SELECT person_id FROM hidden_contacts WHERE user_id = ?)
+         ORDER BY rs.tie_strength DESC
+         LIMIT ?`,
+      )
+      .all(userId, GMAIL_GRAPH_MIN_STRENGTH, userId, perUserLimit) as { person_id: number; tie_strength: number }[];
+
+    const ownerDegree = degrees.get(ownerPersonId) ?? 0;
+    for (const sc of contacts) {
+      allScoredContacts.push({ ...sc, owner_person_id: ownerPersonId });
+      personIds.add(sc.person_id);
+      if (!degrees.has(sc.person_id)) {
+        // Gmail contacts are 1 hop from their owner
+        degrees.set(sc.person_id, ownerDegree + 1);
       }
     }
   }
 
-  // Build scored person lookup
+  // Build scored person lookup (keep highest tie strength if duplicated)
   const scoredMap = new Map<number, number>();
-  for (const sc of scoredContacts) {
-    scoredMap.set(sc.person_id, sc.tie_strength);
+  for (const sc of allScoredContacts) {
+    const existing = scoredMap.get(sc.person_id) ?? 0;
+    if (sc.tie_strength > existing) {
+      scoredMap.set(sc.person_id, sc.tie_strength);
+    }
   }
 
   // Fetch person data
@@ -177,23 +190,25 @@ export function getGraphForPerson(
       edgeSource: "manual" as const,
     }));
 
-  // Track which person IDs already have an edge to center
-  const connectedToCenter = new Set<number>();
+  // Track existing edges between pairs to avoid duplicates
+  const edgePairSet = new Set<string>();
   for (const e of edges) {
-    if (e.source === centerPersonId) connectedToCenter.add(e.target);
-    if (e.target === centerPersonId) connectedToCenter.add(e.source);
+    const key = [Math.min(e.source, e.target), Math.max(e.source, e.target)].join(",");
+    edgePairSet.add(key);
   }
 
-  // Add synthetic edges for Gmail-derived contacts not already connected
+  // Add synthetic edges for Gmail-derived contacts not already connected to their owner
   let syntheticId = -1;
-  for (const sc of scoredContacts) {
-    if (connectedToCenter.has(sc.person_id)) continue;
-    if (sc.person_id === centerPersonId) continue;
+  for (const sc of allScoredContacts) {
+    if (sc.person_id === sc.owner_person_id) continue;
     if (!nodeIdSet.has(sc.person_id)) continue;
+    const key = [Math.min(sc.owner_person_id, sc.person_id), Math.max(sc.owner_person_id, sc.person_id)].join(",");
+    if (edgePairSet.has(key)) continue;
+    edgePairSet.add(key);
 
     edges.push({
       id: syntheticId--,
-      source: centerPersonId,
+      source: sc.owner_person_id,
       target: sc.person_id,
       relationshipType: "other",
       closenessScore: Math.max(1, Math.round(sc.tie_strength * 10)),
@@ -203,13 +218,13 @@ export function getGraphForPerson(
     });
   }
 
-  // Annotate tieStrength on existing edges to center from scored data
+  // Annotate tieStrength on existing manual edges from scored data
   for (const e of edges) {
-    if (e.edgeSource === "manual") {
-      const otherId = e.source === centerPersonId ? e.target : e.target === centerPersonId ? e.source : null;
-      if (otherId !== null && scoredMap.has(otherId) && e.tieStrength === undefined) {
-        e.tieStrength = scoredMap.get(otherId);
-      }
+    if (e.edgeSource === "manual" && e.tieStrength === undefined) {
+      const s = scoredMap.get(e.source);
+      const t = scoredMap.get(e.target);
+      if (s != null) e.tieStrength = s;
+      else if (t != null) e.tieStrength = t;
     }
   }
 

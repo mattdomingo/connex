@@ -226,10 +226,10 @@ router.get("/intermediaries/:targetId", requireAuth, (req, res) => {
 });
 
 /**
- * GET /api/graph/next-hops/:fromId/:targetId
+ * GET /api/graph/next-hops/:fromId/:targetId?exclude=1,2,3
  * Returns valid next-hop options from a given node toward a target.
- * Used by the multi-hop intro chain builder: after picking hop N,
- * this returns the options for hop N+1.
+ * The `exclude` query param lists person IDs already in the chain
+ * so that BFS avoids them, preventing dead-end selections.
  */
 router.get("/next-hops/:fromId/:targetId", requireAuth, (req, res) => {
   const fromId = parseInt(String(req.params.fromId), 10);
@@ -240,6 +240,12 @@ router.get("/next-hops/:fromId/:targetId", requireAuth, (req, res) => {
     return;
   }
 
+  // Parse excluded node IDs (the chain so far)
+  const excludeStr = (req.query.exclude as string) || "";
+  const excludeSet = new Set(
+    excludeStr.split(",").map(Number).filter((n) => !isNaN(n) && n !== targetId)
+  );
+
   const db = getDb();
 
   const edges = db
@@ -247,20 +253,28 @@ router.get("/next-hops/:fromId/:targetId", requireAuth, (req, res) => {
       "SELECT id, source_person_id, target_person_id, relationship_type, closeness_score, status FROM connections WHERE status = 'accepted'"
     )
     .all() as AlgEdge[];
+
+  // Build adjacency that excludes chain nodes (except the target itself)
+  const filteredEdges = edges.filter(
+    (e) => !excludeSet.has(e.source_person_id) && !excludeSet.has(e.target_person_id)
+  );
+  const adjFiltered = buildAdjacency(filteredEdges);
+
+  // BFS from target on the filtered graph to compute reachability
+  const { degrees: fromTarget } = bfsDegrees(adjFiltered, targetId, 20);
+
+  // Full adjacency for getting neighbors of fromId (we need all edges from this node)
   const adj = buildAdjacency(edges);
-
-  // BFS from target to get reverse degrees
-  const { degrees: fromTarget } = bfsDegrees(adj, targetId, 20);
-
-  // Get 1st-degree neighbors of fromId
   const neighbors = adj.get(fromId) || [];
   const hops: any[] = [];
 
   for (const { neighborId } of neighbors) {
     if (neighborId === fromId) continue;
+    if (excludeSet.has(neighborId)) continue;
 
+    // Check if this neighbor can reach the target on the filtered graph
     const degFromTarget = fromTarget.get(neighborId);
-    if (degFromTarget == null) continue; // can't reach target from here
+    if (degFromTarget == null) continue;
 
     const p = db.prepare("SELECT id, name, email, company, user_id FROM persons WHERE id = ?").get(neighborId) as any;
     if (!p) continue;
