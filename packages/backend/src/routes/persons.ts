@@ -98,7 +98,8 @@ router.get("/", requireAuth, (req, res) => {
     res.status(400).json({ error: "Search query required (use ?q=...)" });
     return;
   }
-  const results = searchPersons(db, query);
+  const usersOnly = req.query.usersOnly === "true";
+  const results = searchPersons(db, query, { usersOnly });
   res.json(results);
 });
 

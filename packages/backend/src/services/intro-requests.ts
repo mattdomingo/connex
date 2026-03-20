@@ -1,7 +1,13 @@
 import type Database from "better-sqlite3";
-import type { ApiIntroRequest, IntroRequestStatus } from "@connex/shared";
-import { buildAdjacency, shortestPath } from "../graph/algorithms.js";
-import type { AlgEdge } from "../graph/algorithms.js";
+import type {
+  ApiIntroRequest,
+  IntroRequestStatus,
+  IntroCandidate,
+  IntroTargetsResponse,
+  IntroIntermediariesResponse,
+} from "@connex/shared";
+import { buildAdjacency, bfsDegrees, shortestPath } from "../graph/algorithms.js";
+import type { AlgEdge, Adjacency } from "../graph/algorithms.js";
 import type { EntitlementPolicy } from "../graph/entitlements.js";
 
 // ── Error type ──────────────────────────────────────────────────────────────
@@ -279,6 +285,173 @@ export function respondToIntroRequest(
   ).run(status, responseNote, id);
 
   return hydratePersonSummaries(db, mapRow(db.prepare("SELECT * FROM intro_requests WHERE id = ?").get(id)));
+}
+
+// ── Suggestion helpers (target & intermediary candidates) ────────────────────
+
+interface PersonSummaryRow {
+  id: number;
+  name: string;
+  email: string | null;
+  company: string | null;
+  user_id: number | null;
+}
+
+function loadPersonSummaries(
+  db: Database.Database,
+  ids: Set<number>,
+): Map<number, PersonSummaryRow> {
+  const map = new Map<number, PersonSummaryRow>();
+  if (ids.size === 0) return map;
+  const placeholders = [...ids].map(() => "?").join(",");
+  const rows = db
+    .prepare(
+      `SELECT id, name, email, company, user_id FROM persons WHERE id IN (${placeholders})`,
+    )
+    .all(...ids) as PersonSummaryRow[];
+  for (const r of rows) map.set(r.id, r);
+  return map;
+}
+
+function toCandidate(
+  p: PersonSummaryRow,
+  minHops: number,
+  maxDegree: number,
+): IntroCandidate {
+  const locked = minHops > maxDegree;
+  return {
+    personId: p.id,
+    name: locked ? "Locked" : p.name,
+    email: locked ? null : p.email,
+    company: locked ? null : p.company,
+    isUser: p.user_id !== null,
+    minHops,
+    locked,
+  };
+}
+
+/**
+ * Suggest introduction targets for the requester.
+ * Returns every reachable person on the accepted-edge graph with their minimum
+ * degree (hop count) from the requester. Candidates further than the requester's
+ * entitlement are returned as locked (so the UI can tease an upgrade).
+ *
+ * Design notes:
+ * - Includes the requester's own 1st-degree connections (degree 1) — the UI may
+ *   filter those out since you wouldn't need an intro.
+ * - Discovers one ring past maxDegree so locked candidates can still be shown.
+ * - Free tier never exposes names for locked candidates.
+ */
+export function suggestIntroTargets(
+  db: Database.Database,
+  requesterPersonId: number,
+  policy: EntitlementPolicy,
+): IntroTargetsResponse {
+  const edges = loadAcceptedEdges(db);
+  const adj = buildAdjacency(edges);
+
+  const discoveryLimit = Number.isFinite(policy.maxDegree)
+    ? policy.maxDegree + 1
+    : 20;
+  const { degrees } = bfsDegrees(adj, requesterPersonId, discoveryLimit);
+  degrees.delete(requesterPersonId);
+
+  const ids = new Set(degrees.keys());
+  const people = loadPersonSummaries(db, ids);
+
+  const candidates: IntroCandidate[] = [];
+  for (const [id, deg] of degrees) {
+    const p = people.get(id);
+    if (!p) continue;
+    candidates.push(toCandidate(p, deg, policy.maxDegree));
+  }
+
+  candidates.sort(
+    (a, b) => a.minHops - b.minHops || a.name.localeCompare(b.name),
+  );
+
+  return { candidates };
+}
+
+/**
+ * Suggest intermediary candidates for the *next* hop in an intro chain.
+ *
+ * The chain so far is [requester, ...chainPersonIds] (excluding target).
+ * The next hop must:
+ *   1. Be directly connected (degree 1) to the last person in the chain.
+ *   2. Not already be in the chain.
+ *   3. Not be the target.
+ *   4. Be able to reach the target.
+ *
+ * `minHops` on each candidate = remaining hops from this candidate to the target.
+ * Paid users see all viable candidates; free users only see candidates that keep
+ * the *total* chain length within their maxDegree (candidates that would extend
+ * the path beyond entitlement are filtered out, not locked — the UI should show
+ * an upgrade CTA in the empty state instead).
+ *
+ * For free users on a 3+-degree target, only 1st-degree connections that can
+ * reach the target are shown (chainPersonIds is empty, anchor is the requester).
+ */
+export function suggestIntroIntermediaries(
+  db: Database.Database,
+  requesterPersonId: number,
+  targetPersonId: number,
+  chainPersonIds: number[],
+  policy: EntitlementPolicy,
+): IntroIntermediariesResponse {
+  const edges = loadAcceptedEdges(db);
+  const adj = buildAdjacency(edges);
+
+  // Minimum total path length requester→target.
+  const direct = shortestPath(adj, requesterPersonId, targetPersonId);
+  const targetDegree = direct.length;
+
+  if (targetDegree < 0) {
+    return { candidates: [], targetDegree: -1 };
+  }
+
+  const fullChain = [requesterPersonId, ...chainPersonIds];
+  const anchor = fullChain[fullChain.length - 1];
+  const chainSet = new Set(fullChain);
+  const hopsSoFar = fullChain.length - 1;
+
+  // Distances from every node to the target (BFS from target — graph is undirected).
+  const { degrees: distToTarget } = bfsDegrees(adj, targetPersonId, Infinity);
+
+  // Direct neighbors of anchor are the candidate set for the next hop.
+  const neighbors = adj.get(anchor) || [];
+  const nextIds = new Set<number>();
+  for (const { neighborId } of neighbors) {
+    if (chainSet.has(neighborId)) continue;
+    if (neighborId === targetPersonId) continue;
+    if (!distToTarget.has(neighborId)) continue; // unreachable from target
+    nextIds.add(neighborId);
+  }
+
+  const people = loadPersonSummaries(db, nextIds);
+
+  const isPaid = !Number.isFinite(policy.maxDegree);
+
+  const candidates: IntroCandidate[] = [];
+  for (const id of nextIds) {
+    const p = people.get(id);
+    if (!p) continue;
+    const remainingHops = distToTarget.get(id)!;
+    const wouldTotal = hopsSoFar + 1 + remainingHops;
+
+    // Free tier: only show intermediaries that keep the total path inside the
+    // maxDegree gate. If the target itself is already outside the gate this
+    // means the list is empty — the UI surfaces an upgrade prompt in that case.
+    if (!isPaid && wouldTotal > policy.maxDegree) continue;
+
+    candidates.push(toCandidate(p, remainingHops, policy.maxDegree));
+  }
+
+  candidates.sort(
+    (a, b) => a.minHops - b.minHops || a.name.localeCompare(b.name),
+  );
+
+  return { candidates, targetDegree };
 }
 
 /** Requester cancels their own pending request. */

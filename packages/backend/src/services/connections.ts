@@ -17,8 +17,6 @@ export function createConnection(
     createdByUserId: number;
   },
 ): ApiConnection {
-  // Determine status: if target person is a registered user, start as pending.
-  // If target is a non-user contact, auto-accept.
   const targetPerson = db
     .prepare("SELECT user_id FROM persons WHERE id = ?")
     .get(data.targetPersonId) as any;
@@ -31,9 +29,16 @@ export function createConnection(
     throw new Error("Person not found");
   }
 
-  // Auto-accept if target is not a registered user, or if both are the same user's contacts
-  const status: ConnectionStatus =
-    targetPerson.user_id && sourcePerson.user_id ? "pending" : "accepted";
+  // Connection requests are LinkedIn-style: both sides must be registered users
+  // on the platform. The target must accept before the edge is traversable.
+  if (targetPerson.user_id === null) {
+    throw new Error("Target is not a registered user");
+  }
+  if (sourcePerson.user_id === null) {
+    throw new Error("Source is not a registered user");
+  }
+
+  const status: ConnectionStatus = "pending";
 
   const result = db
     .prepare(

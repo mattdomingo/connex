@@ -57,6 +57,8 @@ router.post("/", requireAuth, (req, res) => {
       res.status(409).json({ error: "A connection between these people already exists" });
     } else if (err.message?.includes("Person not found")) {
       res.status(404).json({ error: err.message });
+    } else if (err.message?.includes("not a registered user")) {
+      res.status(400).json({ error: "You can only send connection requests to registered Connex users" });
     } else {
       res.status(500).json({ error: "Failed to create connection", details: err.message });
     }

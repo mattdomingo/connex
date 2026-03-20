@@ -192,12 +192,29 @@ export interface GmailSyncRun {
   errorMessage: string | null;
 }
 
+/** Rolling live-feed item emitted while a Gmail sync is in progress. */
+export interface SyncFeedItem {
+  id: number;
+  gmailMessageId: string;
+  direction: "sent" | "received";
+  counterpartyEmail: string;
+  counterpartyName: string | null;
+  occurredAt: string;
+  createdAt: string;
+}
+
+export interface SyncFeedResponse {
+  run: GmailSyncRun | null;
+  items: SyncFeedItem[];
+}
+
 export interface RankedConnection {
   personId: number;
   name: string;
   email: string | null;
   domain: string | null;
   company: string | null;
+  isUser: boolean;
   tieStrength: number;
   interactionCount: number;
   sentCount: number;
@@ -256,6 +273,31 @@ export interface CreateIntroRequestPayload {
   targetPersonId: number;
   intermediaryPersonId: number;
   requestNote?: string;
+}
+
+/**
+ * Candidate person for intro target/intermediary selection.
+ * `minHops` = minimum number of remaining hops from the chain position to the target
+ * if this candidate is chosen.
+ */
+export interface IntroCandidate {
+  personId: number;
+  name: string;
+  email: string | null;
+  company: string | null;
+  isUser: boolean;
+  minHops: number;
+  locked: boolean;
+}
+
+export interface IntroTargetsResponse {
+  candidates: IntroCandidate[];
+}
+
+export interface IntroIntermediariesResponse {
+  candidates: IntroCandidate[];
+  /** Minimum total chain length (requester→…→target) for the selected target. */
+  targetDegree: number;
 }
 
 export interface RespondIntroRequestPayload {

@@ -1,14 +1,42 @@
-import { useEffect, useRef, useCallback, useMemo } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import ForceGraph2D from "react-force-graph-2d";
-import type { GraphData, GraphNode, GraphEdge } from "@connex/shared";
+import type { GraphData, GraphNode } from "@connex/shared";
+import { useTheme } from "../hooks/useTheme.js";
 
-const COLORS: Record<string, string> = {
-  friend: "#3fb950",
-  coworker: "#58a6ff",
-  classmate: "#bc8cff",
-  family: "#d29922",
-  other: "#8b949e",
+/**
+ * Relationship → RGB base color.
+ * Intensity (alpha / lightness mix) is applied on top based on tie strength or
+ * closeness score, giving a monotonic weak→strong gradient within each hue.
+ */
+const REL_RGB: Record<string, [number, number, number]> = {
+  friend:    [63, 185, 80],   // green
+  coworker:  [88, 166, 255],  // blue
+  classmate: [188, 140, 255], // purple
+  family:    [210, 153, 34],  // amber
+  other:     [139, 148, 158], // grey
 };
+
+/**
+ * Compute normalized strength ∈ [0,1] from either tieStrength (gmail-derived)
+ * or closenessScore (1–10, manual). Prefer tieStrength when present.
+ */
+function edgeStrength(link: any): number {
+  if (link.tieStrength != null) return Math.max(0, Math.min(1, link.tieStrength));
+  if (link.closenessScore != null) return (link.closenessScore - 1) / 9;
+  return 0.5;
+}
+
+/** Render a CSS rgba() with alpha tied to strength. */
+function intensityColor(relType: string, strength: number): string {
+  const [r, g, b] = REL_RGB[relType] || REL_RGB.other;
+  // Alpha range: 0.2 (weak) → 1.0 (strong), monotonic.
+  const alpha = 0.2 + strength * 0.8;
+  return `rgba(${r}, ${g}, ${b}, ${alpha.toFixed(3)})`;
+}
+
+function relLabel(t: string): string {
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
 
 interface Props {
   data: GraphData;
@@ -16,6 +44,16 @@ interface Props {
   selectedNodeId: number | null;
   pathNodeIds: Set<number> | null;
   pathEdgeIds: Set<number> | null;
+}
+
+interface Tooltip {
+  x: number;
+  y: number;
+  relationship: string;
+  strength: number;
+  sourceName: string;
+  targetName: string;
+  isGmail: boolean;
 }
 
 export function GraphVisualization({
@@ -27,6 +65,17 @@ export function GraphVisualization({
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<any>(null);
+  const { resolved: theme } = useTheme();
+
+  const [hoveredLink, setHoveredLink] = useState<any>(null);
+  const [tooltip, setTooltip] = useState<Tooltip | null>(null);
+  const [dims, setDims] = useState({ w: 600, h: 400 });
+
+  const nodeNameById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const n of data.nodes) m.set(n.id, n.locked ? "Locked" : n.name);
+    return m;
+  }, [data.nodes]);
 
   // Transform data for force-graph
   const graphInput = useMemo(() => {
@@ -54,6 +103,19 @@ export function GraphVisualization({
     return { nodes, links };
   }, [data]);
 
+  // Responsive sizing via ResizeObserver
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect;
+      if (r) setDims({ w: r.width, h: r.height });
+    });
+    ro.observe(el);
+    setDims({ w: el.clientWidth, h: el.clientHeight });
+    return () => ro.disconnect();
+  }, []);
+
   useEffect(() => {
     if (fgRef.current) {
       fgRef.current.d3Force("charge").strength(-200);
@@ -61,19 +123,22 @@ export function GraphVisualization({
     }
   }, [graphInput]);
 
+  const isDark = theme === "dark";
+  const bgColor = isDark ? "#0f1117" : "#ffffff";
+  const labelColor = isDark ? "#e1e4e8" : "#24292f";
+  const lockedColor = isDark ? "rgba(110,118,129,0.3)" : "rgba(110,118,129,0.35)";
+  const highlightColor = "#f0883e";
+
   const nodeColor = useCallback(
     (node: any) => {
-      if (node.locked) return "rgba(110, 118, 129, 0.3)";
-      if (pathNodeIds?.has(node.id)) return "#f0883e";
-      if (node.id === selectedNodeId) return "#f0883e";
-      if (node.isCenter) return "#f0883e";
-      if (node.isUser) return "#58a6ff";
-      // Gmail contacts with tie strength get a green tint
-      if (node.tieStrength != null && node.tieStrength > 0.5) return "#3fb950";
-      if (node.tieStrength != null) return "#8b949e";
-      return "#8b949e";
+      if (node.locked) return lockedColor;
+      if (pathNodeIds?.has(node.id)) return highlightColor;
+      if (node.id === selectedNodeId) return highlightColor;
+      if (node.isCenter) return highlightColor;
+      if (node.isUser) return isDark ? "#58a6ff" : "#0969da";
+      return isDark ? "#8b949e" : "#6e7781";
     },
-    [selectedNodeId, pathNodeIds]
+    [selectedNodeId, pathNodeIds, isDark, lockedColor]
   );
 
   const nodeSize = useCallback(
@@ -82,7 +147,6 @@ export function GraphVisualization({
       if (node.locked) return 3;
       if (pathNodeIds?.has(node.id)) return 7;
       if (node.id === selectedNodeId) return 7;
-      // Scale by tie strength: 3-7 range
       if (node.tieStrength != null) return 3 + node.tieStrength * 4;
       return 5;
     },
@@ -91,15 +155,10 @@ export function GraphVisualization({
 
   const linkColor = useCallback(
     (link: any) => {
-      if (pathEdgeIds?.has(link.id)) return "#f0883e";
-      if (link.status === "pending") return "rgba(210, 153, 34, 0.4)";
-      if (link.edgeSource === "gmail") {
-        const strength = link.tieStrength ?? 0.3;
-        // Green with opacity based on strength
-        const alpha = 0.2 + strength * 0.6;
-        return `rgba(63, 185, 80, ${alpha})`;
-      }
-      return COLORS[link.relationshipType] || "#30363d";
+      if (pathEdgeIds?.has(link.id)) return highlightColor;
+      if (link.status === "pending") return intensityColor("family", 0.3); // dashed amber hint
+      const rel = link.relationshipType || "other";
+      return intensityColor(rel, edgeStrength(link));
     },
     [pathEdgeIds]
   );
@@ -107,24 +166,21 @@ export function GraphVisualization({
   const linkWidth = useCallback(
     (link: any) => {
       if (pathEdgeIds?.has(link.id)) return 3;
-      if (link.tieStrength != null) {
-        // Scale width 0.5-4 based on tie strength
-        return 0.5 + link.tieStrength * 3.5;
-      }
-      return 1;
+      if (hoveredLink && link.id === hoveredLink.id) return 3;
+      return 0.5 + edgeStrength(link) * 3.5;
     },
-    [pathEdgeIds]
+    [pathEdgeIds, hoveredLink]
   );
 
   const linkDashArray = useCallback((link: any) => {
     if (link.status === "pending") return [4, 4];
-    if (link.edgeSource === "gmail" && (link.tieStrength ?? 0) < 0.3) return [2, 3];
     return undefined;
   }, []);
 
   const nodeLabel = useCallback((node: any) => {
     if (node.locked) return "Locked (upgrade to see)";
-    const degreeLabel = node.degree > 0 ? ` (${node.degree}${node.degree === 1 ? "st" : node.degree === 2 ? "nd" : "rd"} degree)` : " (you)";
+    const suffix = ["th", "st", "nd", "rd"][Math.min(node.degree, 3)] ?? "th";
+    const degreeLabel = node.degree > 0 ? ` (${node.degree}${suffix} degree)` : " (you)";
     const strengthLabel = node.tieStrength != null ? ` · Strength: ${Math.round(node.tieStrength * 100)}` : "";
     return `${node.name}${degreeLabel}${strengthLabel}`;
   }, []);
@@ -135,32 +191,67 @@ export function GraphVisualization({
       const color = nodeColor(node);
       const fontSize = Math.max(10 / globalScale, 1.5);
 
-      // Node circle
       ctx.beginPath();
       ctx.arc(node.x, node.y, size, 0, 2 * Math.PI, false);
       ctx.fillStyle = color;
       ctx.fill();
 
       if (node.id === selectedNodeId || pathNodeIds?.has(node.id) || node.isCenter) {
-        ctx.strokeStyle = "#f0883e";
+        ctx.strokeStyle = highlightColor;
         ctx.lineWidth = 2 / globalScale;
         ctx.stroke();
       }
 
-      // Label
       if (!node.locked && globalScale > 0.7) {
         ctx.font = `${node.isCenter ? "bold " : ""}${fontSize}px -apple-system, sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-        ctx.fillStyle = node.locked ? "rgba(110,118,129,0.3)" : "#e1e4e8";
+        ctx.fillStyle = labelColor;
         ctx.fillText(node.name, node.x, node.y + size + 2);
       }
     },
-    [nodeSize, nodeColor, selectedNodeId, pathNodeIds]
+    [nodeSize, nodeColor, selectedNodeId, pathNodeIds, labelColor]
+  );
+
+  const handleLinkHover = useCallback(
+    (link: any) => {
+      setHoveredLink(link);
+      if (!link || !fgRef.current) {
+        setTooltip(null);
+        return;
+      }
+      // Midpoint in graph coords → screen coords
+      const sx = typeof link.source === "object" ? link.source.x : undefined;
+      const sy = typeof link.source === "object" ? link.source.y : undefined;
+      const tx = typeof link.target === "object" ? link.target.x : undefined;
+      const ty = typeof link.target === "object" ? link.target.y : undefined;
+      if (sx == null || tx == null) return;
+      const mx = (sx + tx) / 2;
+      const my = (sy! + ty!) / 2;
+      const screen = fgRef.current.graph2ScreenCoords(mx, my);
+
+      const srcId = typeof link.source === "object" ? link.source.id : link.source;
+      const tgtId = typeof link.target === "object" ? link.target.id : link.target;
+
+      setTooltip({
+        x: screen.x,
+        y: screen.y,
+        relationship: link.relationshipType,
+        strength: edgeStrength(link),
+        sourceName: nodeNameById.get(srcId) ?? "?",
+        targetName: nodeNameById.get(tgtId) ?? "?",
+        isGmail: link.edgeSource === "gmail",
+      });
+    },
+    [nodeNameById]
   );
 
   return (
-    <div ref={containerRef} className="graph-container" style={{ height: "100%", position: "relative" }}>
+    <div
+      ref={containerRef}
+      className="graph-container"
+      style={{ height: "100%", width: "100%", position: "relative" }}
+    >
       <ForceGraph2D
         ref={fgRef}
         graphData={graphInput}
@@ -172,47 +263,72 @@ export function GraphVisualization({
           ctx.fillStyle = color;
           ctx.fill();
         }}
+        nodeLabel={nodeLabel}
         linkColor={linkColor}
         linkWidth={linkWidth}
         linkLineDash={linkDashArray}
+        linkHoverPrecision={6}
+        onLinkHover={handleLinkHover}
         onNodeClick={(node: any) => {
           const graphNode = data.nodes.find((n) => n.id === node.id);
           if (graphNode) onNodeClick(graphNode);
         }}
-        backgroundColor="#0f1117"
-        width={containerRef.current?.clientWidth}
-        height={containerRef.current?.clientHeight}
+        backgroundColor={bgColor}
+        width={dims.w}
+        height={dims.h}
         cooldownTicks={100}
         warmupTicks={50}
       />
-      {/* Strength Legend */}
-      <div style={{
-        position: "absolute",
-        bottom: 12,
-        left: 12,
-        background: "rgba(22, 27, 34, 0.9)",
-        border: "1px solid #30363d",
-        borderRadius: 6,
-        padding: "8px 12px",
-        fontSize: 11,
-        color: "#8b949e",
-      }}>
-        <div style={{ fontWeight: 500, marginBottom: 4, color: "#e1e4e8" }}>Edge Strength</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
-          <div style={{ width: 24, height: 4, background: "rgba(63, 185, 80, 0.8)", borderRadius: 2 }} />
-          <span>Strong tie</span>
+
+      {/* Edge hover tooltip */}
+      {tooltip && (
+        <div
+          className="edge-tooltip"
+          style={{
+            position: "absolute",
+            left: Math.min(Math.max(tooltip.x + 12, 8), dims.w - 180),
+            top: Math.min(Math.max(tooltip.y - 10, 8), dims.h - 70),
+            pointerEvents: "none",
+          }}
+        >
+          <div className="text-xs font-medium">
+            {tooltip.sourceName} ↔ {tooltip.targetName}
+          </div>
+          <div className="text-xs">
+            <span
+              className={`badge badge-${tooltip.relationship}`}
+              style={{ padding: "0 6px", fontSize: 9 }}
+            >
+              {relLabel(tooltip.relationship)}
+            </span>
+            <span style={{ marginLeft: 6 }}>
+              Strength {Math.round(tooltip.strength * 100)}
+            </span>
+            {tooltip.isGmail && (
+              <span className="text-muted" style={{ marginLeft: 4 }}>· via email</span>
+            )}
+          </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
-          <div style={{ width: 24, height: 2, background: "rgba(63, 185, 80, 0.4)", borderRadius: 2 }} />
-          <span>Moderate tie</span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
-          <div style={{ width: 24, height: 1, background: "rgba(63, 185, 80, 0.2)", borderRadius: 2, borderTop: "1px dashed rgba(63,185,80,0.3)" }} />
-          <span>Weak tie</span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <div style={{ width: 24, height: 1, background: "#58a6ff", borderRadius: 2 }} />
-          <span>Manual connection</span>
+      )}
+
+      {/* Legend */}
+      <div className="graph-legend-box">
+        <div style={{ fontWeight: 500, marginBottom: 4 }}>Relationship</div>
+        {Object.entries(REL_RGB).map(([rel, rgb]) => (
+          <div key={rel} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+            <div
+              style={{
+                width: 24,
+                height: 3,
+                borderRadius: 2,
+                background: `linear-gradient(90deg, rgba(${rgb.join(",")},0.2), rgba(${rgb.join(",")},1))`,
+              }}
+            />
+            <span>{relLabel(rel)}</span>
+          </div>
+        ))}
+        <div className="text-muted" style={{ marginTop: 4, fontSize: 10 }}>
+          Faded → strong = tie intensity
         </div>
       </div>
     </div>

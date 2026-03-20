@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import type { GraphData, GraphNode, ShortestPathResult } from "@connex/shared";
 import { useAuth } from "../hooks/useAuth.js";
 import * as api from "../api/client.js";
@@ -11,7 +11,6 @@ export function GraphPage() {
   const [graphData, setGraphData] = useState<GraphData | null>(null);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [pathResult, setPathResult] = useState<ShortestPathResult | null>(null);
-  const [pathTarget, setPathTarget] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -36,12 +35,10 @@ export function GraphPage() {
     if (node.locked) return;
     setSelectedNode(node);
     setPathResult(null);
-    setPathTarget(null);
   };
 
   const handleFindPath = async (targetId: number) => {
     if (!person) return;
-    setPathTarget(targetId);
     try {
       const result = await api.getShortestPath(person.id, targetId);
       setPathResult(result);
@@ -53,7 +50,6 @@ export function GraphPage() {
   const handleRecenter = (personId: number) => {
     setSelectedNode(null);
     setPathResult(null);
-    setPathTarget(null);
     loadGraph(personId);
   };
 
@@ -62,12 +58,12 @@ export function GraphPage() {
   }
 
   return (
-    <div>
+    <div className="graph-page">
       <div className="page-header flex justify-between items-center">
         <div>
           <h1 className="page-title">Graph Explorer</h1>
           <p className="page-subtitle">
-            Explore your relationship network. 3rd-degree+ connections are locked.
+            Explore your relationship network. Hover an edge for details.
           </p>
         </div>
         {graphData && graphData.centerPersonId !== person?.id && (
@@ -79,8 +75,8 @@ export function GraphPage() {
 
       {error && <div className="error-msg mb-4">{error}</div>}
 
-      <div className="flex gap-4" style={{ height: "calc(100vh - 160px)" }}>
-        <div className="flex-1">
+      <div className="graph-workspace">
+        <div className="graph-canvas">
           {graphData && (
             <GraphVisualization
               data={graphData}
@@ -92,9 +88,12 @@ export function GraphPage() {
           )}
         </div>
 
-        <div style={{ width: 320, overflowY: "auto" }}>
+        <aside className="graph-sidepanel">
           {pathResult && (
-            <PathDisplay path={pathResult} onClose={() => { setPathResult(null); setPathTarget(null); }} />
+            <PathDisplay
+              path={pathResult}
+              onClose={() => setPathResult(null)}
+            />
           )}
 
           {selectedNode && !selectedNode.locked && (
@@ -110,30 +109,28 @@ export function GraphPage() {
             <div className="card">
               <div className="card-header">Getting Started</div>
               <p className="text-sm text-secondary">
-                Click on any node in the graph to see details. You can find the shortest
-                path between yourself and anyone, or re-center the graph on a different person.
+                Click a node for details. Hover an edge to see relationship
+                type and tie strength. Color hue = relationship; opacity =
+                strength.
               </p>
               <div className="mt-4">
-                <div className="text-xs text-muted mb-2">Graph Legend</div>
+                <div className="text-xs text-muted mb-2">Node Types</div>
                 <div className="legend-item">
                   <span className="legend-dot" style={{ background: "#58a6ff" }} />
                   <span className="text-xs">Registered user</span>
                 </div>
                 <div className="legend-item">
                   <span className="legend-dot" style={{ background: "#8b949e" }} />
-                  <span className="text-xs">Contact (not registered)</span>
+                  <span className="text-xs">Contact</span>
                 </div>
                 <div className="legend-item">
                   <span className="legend-dot" style={{ background: "#6e7681", opacity: 0.4 }} />
-                  <span className="text-xs">Locked (3rd degree+)</span>
-                </div>
-                <div className="legend-item mt-2">
-                  <span className="text-xs text-muted">Dashed lines = pending connections</span>
+                  <span className="text-xs">Locked (upgrade)</span>
                 </div>
               </div>
             </div>
           )}
-        </div>
+        </aside>
       </div>
     </div>
   );

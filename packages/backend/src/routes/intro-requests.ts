@@ -11,6 +11,8 @@ import {
   getIntroRequestById,
   respondToIntroRequest,
   cancelIntroRequest,
+  suggestIntroTargets,
+  suggestIntroIntermediaries,
 } from "../services/intro-requests.js";
 
 const router = Router();
@@ -31,6 +33,48 @@ function handleIntroError(res: any, err: IntroRequestError): void {
   };
   res.status(status[err.code] ?? 400).json({ error: err.message, code: err.code });
 }
+
+/**
+ * GET /api/intro-requests/targets
+ * Suggest reachable persons with minimum hop counts.
+ */
+router.get("/targets", requireAuth, (req, res) => {
+  const db = getDb();
+  const requester = getPersonByUserId(db, req.user!.userId);
+  if (!requester) {
+    res.status(404).json({ error: "Profile not found" });
+    return;
+  }
+  const policy = getPolicyForUser(req.user!.userId);
+  res.json(suggestIntroTargets(db, requester.id, policy));
+});
+
+/**
+ * GET /api/intro-requests/intermediaries?targetId=X&chain=1,2,3
+ * Suggest valid next-hop intermediaries for a given target + partial chain.
+ */
+router.get("/intermediaries", requireAuth, (req, res) => {
+  const targetId = parseInt(String(req.query.targetId), 10);
+  if (isNaN(targetId)) {
+    res.status(400).json({ error: "targetId is required" });
+    return;
+  }
+
+  const chain = String(req.query.chain || "")
+    .split(",")
+    .map((s) => parseInt(s, 10))
+    .filter((n) => !isNaN(n));
+
+  const db = getDb();
+  const requester = getPersonByUserId(db, req.user!.userId);
+  if (!requester) {
+    res.status(404).json({ error: "Profile not found" });
+    return;
+  }
+
+  const policy = getPolicyForUser(req.user!.userId);
+  res.json(suggestIntroIntermediaries(db, requester.id, targetId, chain, policy));
+});
 
 /**
  * POST /api/intro-requests — Create a new intro request

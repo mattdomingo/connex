@@ -1,5 +1,5 @@
 import type Database from "better-sqlite3";
-import type { GmailSyncRun } from "@connex/shared";
+import type { GmailSyncRun, SyncFeedItem } from "@connex/shared";
 
 // ── Configuration ──
 
@@ -346,6 +346,11 @@ export async function runGmailSync(
   let messagesProcessed = 0;
   let latestInternalDate = lastRun?.cursor || null;
 
+  // Incrementally persist progress so status polls reflect live counts.
+  const updateProgress = db.prepare(
+    "UPDATE gmail_sync_runs SET messages_scanned = ?, messages_processed = ? WHERE id = ?",
+  );
+
   try {
     // Build query: Inbox + Sent, within backfill window
     const afterDate = new Date();
@@ -388,8 +393,15 @@ export async function runGmailSync(
           // Skip individual message errors, continue sync
           console.error(`Failed to process message ${msgRef.id}:`, err);
         }
+
+        // Flush progress every 10 messages so pollers see live updates.
+        if (messagesScanned % 10 === 0) {
+          updateProgress.run(messagesScanned, messagesProcessed, runId);
+        }
       }
 
+      // Also flush at page boundaries.
+      updateProgress.run(messagesScanned, messagesProcessed, runId);
       pageToken = listResp.nextPageToken;
     } while (pageToken);
 
@@ -424,6 +436,53 @@ export function getLatestSyncRun(
     )
     .get(userId) as any;
   return row ? mapSyncRun(row) : null;
+}
+
+export function getSyncRunById(
+  db: Database.Database,
+  runId: number,
+): GmailSyncRun | null {
+  const row = db
+    .prepare("SELECT * FROM gmail_sync_runs WHERE id = ?")
+    .get(runId) as any;
+  return row ? mapSyncRun(row) : null;
+}
+
+/**
+ * Returns the most recently ingested interactions for a user — used to drive
+ * the live feed on the Profile page while a sync is in progress.
+ * `afterId` allows the client to only fetch new items since its last poll.
+ */
+export function getRecentFeedItems(
+  db: Database.Database,
+  userId: number,
+  opts: { afterId?: number; limit?: number } = {},
+): SyncFeedItem[] {
+  const limit = Math.min(opts.limit ?? 50, 200);
+  let query =
+    `SELECT id, gmail_message_id, direction, counterparty_email, counterparty_name, occurred_at, created_at
+     FROM email_interactions
+     WHERE user_id = ?`;
+  const params: any[] = [userId];
+
+  if (opts.afterId) {
+    query += " AND id > ?";
+    params.push(opts.afterId);
+  }
+
+  query += " ORDER BY id DESC LIMIT ?";
+  params.push(limit);
+
+  const rows = db.prepare(query).all(...params) as any[];
+  return rows.map((r) => ({
+    id: r.id,
+    gmailMessageId: r.gmail_message_id,
+    direction: r.direction,
+    counterpartyEmail: r.counterparty_email,
+    counterpartyName: r.counterparty_name,
+    occurredAt: r.occurred_at,
+    createdAt: r.created_at,
+  }));
 }
 
 function mapSyncRun(row: any): GmailSyncRun {

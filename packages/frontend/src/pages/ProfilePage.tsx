@@ -1,10 +1,13 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useAuth } from "../hooks/useAuth.js";
+import { useSyncStatus } from "../hooks/useSyncStatus.js";
 import * as api from "../api/client.js";
-import type { GoogleAccountStatus, GmailSyncRun } from "@connex/shared";
+import type { GoogleAccountStatus, SyncFeedItem } from "@connex/shared";
 
 export function ProfilePage() {
   const { person, refreshProfile } = useAuth();
+  const { run: syncRun, isSyncing, triggerSync } = useSyncStatus();
+
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(person?.name ?? "");
   const [bio, setBio] = useState(person?.bio ?? "");
@@ -14,52 +17,66 @@ export function ProfilePage() {
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
 
-  // Google/Gmail state
   const [googleStatus, setGoogleStatus] = useState<GoogleAccountStatus | null>(null);
-  const [syncStatus, setSyncStatus] = useState<GmailSyncRun | { status: "never_synced" } | null>(null);
-  const [syncing, setSyncing] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(true);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const pollSyncStatus = useCallback(async () => {
-    try {
-      const ss = await api.getGmailSyncStatus();
-      setSyncStatus(ss);
-      if ("status" in ss && ss.status !== "running") {
-        // Sync finished — stop polling
-        if (pollRef.current) {
-          clearInterval(pollRef.current);
-          pollRef.current = null;
-        }
-        setSyncing(false);
-      }
-    } catch {
-      // ignore poll errors
-    }
-  }, []);
+  // Live sync feed
+  const [feedItems, setFeedItems] = useState<SyncFeedItem[]>([]);
+  const lastFeedId = useRef<number>(0);
+  const feedPoll = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     loadGoogleStatus();
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      if (feedPoll.current) clearInterval(feedPoll.current);
     };
   }, []);
 
+  // Poll feed while a sync is running
+  useEffect(() => {
+    const stop = () => {
+      if (feedPoll.current) {
+        clearInterval(feedPoll.current);
+        feedPoll.current = null;
+      }
+    };
+
+    const pull = async () => {
+      try {
+        const res = await api.getGmailSyncFeed(lastFeedId.current || undefined, 50);
+        if (res.items.length) {
+          lastFeedId.current = Math.max(
+            lastFeedId.current,
+            ...res.items.map((i) => i.id),
+          );
+          setFeedItems((prev) => [...res.items, ...prev].slice(0, 200));
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+
+    if (isSyncing) {
+      // Reset feed on a fresh run
+      setFeedItems([]);
+      lastFeedId.current = 0;
+      pull();
+      feedPoll.current = setInterval(pull, 1500);
+    } else {
+      // One final pull to catch the tail after completion.
+      pull();
+      stop();
+    }
+
+    return stop;
+  }, [isSyncing]);
+
   const loadGoogleStatus = async () => {
     try {
-      const [gs, ss] = await Promise.all([
-        api.getGoogleStatus(),
-        api.getGmailSyncStatus(),
-      ]);
+      const gs = await api.getGoogleStatus();
       setGoogleStatus(gs);
-      setSyncStatus(ss);
-      // If sync is currently running, start polling
-      if ("status" in ss && ss.status === "running") {
-        setSyncing(true);
-        pollRef.current = setInterval(pollSyncStatus, 3000);
-      }
     } catch {
-      // Google not configured or not connected
+      /* not configured */
     } finally {
       setGoogleLoading(false);
     }
@@ -93,31 +110,21 @@ export function ProfilePage() {
     try {
       await api.disconnectGoogle();
       setGoogleStatus({ connected: false, email: null, scopes: null, connectedAt: null });
-      setSyncStatus({ status: "never_synced" });
     } catch (err: any) {
       setError(err.message);
     }
   };
 
   const handleSync = async () => {
-    setSyncing(true);
     setError("");
     try {
-      const result = await api.triggerGmailSync();
-      setSyncStatus(result);
-      // Start polling if sync is running
-      if (result.status === "running") {
-        pollRef.current = setInterval(pollSyncStatus, 3000);
-      }
+      await triggerSync();
     } catch (err: any) {
       setError(err.message);
-      setSyncing(false);
     }
   };
 
   if (!person) return null;
-
-  const syncRun = syncStatus && "id" in syncStatus ? syncStatus as GmailSyncRun : null;
 
   return (
     <div>
@@ -135,9 +142,7 @@ export function ProfilePage() {
 
       {error && <div className="error-msg mb-4">{error}</div>}
       {success && (
-        <div className="mb-4" style={{ background: "#1f3d2b", border: "1px solid #3fb950", color: "#3fb950", padding: "8px 12px", borderRadius: 6, fontSize: 13 }}>
-          Profile updated successfully
-        </div>
+        <div className="mb-4 success-msg">Profile updated successfully</div>
       )}
 
       <div className="card">
@@ -207,33 +212,33 @@ export function ProfilePage() {
                 <button
                   className="btn text-xs"
                   onClick={handleDisconnectGoogle}
-                  style={{ color: "#f85149" }}
-                  disabled={syncing}
+                  style={{ color: "var(--danger)" }}
+                  disabled={isSyncing}
                 >
                   Disconnect
                 </button>
               </div>
 
-              <div style={{ borderTop: "1px solid #30363d", paddingTop: 12 }}>
+              <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
                 <div className="flex justify-between items-center">
                   <div style={{ flex: 1 }}>
                     <div className="text-sm font-medium">Gmail Sync</div>
                     <div className="text-xs text-muted mt-1">
-                      {syncing ? (
-                        <span style={{ color: "#d29922" }}>
-                          Syncing inbox metadata...
+                      {isSyncing ? (
+                        <span style={{ color: "var(--warning)" }}>
+                          Syncing inbox metadata…
                           {syncRun && syncRun.messagesScanned > 0 && (
-                            <> ({syncRun.messagesScanned} scanned)</>
+                            <> ({syncRun.messagesScanned} scanned, {syncRun.messagesProcessed} ingested)</>
                           )}
                         </span>
                       ) : syncRun ? (
                         syncRun.status === "success" ? (
-                          <span style={{ color: "#3fb950" }}>
+                          <span style={{ color: "var(--success)" }}>
                             Last sync: {syncRun.messagesProcessed} interactions from {syncRun.messagesScanned} messages
                             {syncRun.finishedAt && <> · {new Date(syncRun.finishedAt).toLocaleString()}</>}
                           </span>
                         ) : syncRun.status === "failed" ? (
-                          <span style={{ color: "#f85149" }}>
+                          <span style={{ color: "var(--danger)" }}>
                             Last sync failed: {syncRun.errorMessage || "Unknown error"}
                           </span>
                         ) : null
@@ -245,31 +250,55 @@ export function ProfilePage() {
                   <button
                     className="btn btn-primary text-sm"
                     onClick={handleSync}
-                    disabled={syncing}
+                    disabled={isSyncing}
                     style={{ minWidth: 100 }}
                   >
-                    {syncing ? (
+                    {isSyncing ? (
                       <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <span className="spinner" />
-                        Syncing...
+                        <span className="sync-spinner" />
+                        Syncing…
                       </span>
                     ) : "Sync Now"}
                   </button>
                 </div>
 
-                {/* Progress bar while syncing */}
-                {syncing && (
-                  <div style={{ marginTop: 8, height: 3, background: "#21262d", borderRadius: 2, overflow: "hidden" }}>
-                    <div style={{
-                      height: "100%",
-                      background: "#d29922",
-                      borderRadius: 2,
-                      animation: "indeterminate 1.5s ease-in-out infinite",
-                      width: "30%",
-                    }} />
+                {isSyncing && (
+                  <div className="sync-progress">
+                    <div className="sync-progress-bar" />
                   </div>
                 )}
               </div>
+
+              {/* Live feed of inbound metadata */}
+              {(isSyncing || feedItems.length > 0) && (
+                <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 12 }}>
+                  <div className="text-sm font-medium mb-2">
+                    Live Feed {isSyncing && <span className="text-xs text-muted">(streaming)</span>}
+                  </div>
+                  <div className="sync-feed">
+                    {feedItems.length === 0 ? (
+                      <div className="text-xs text-muted">Waiting for first message…</div>
+                    ) : (
+                      feedItems.map((it) => (
+                        <div key={it.id} className="sync-feed-item">
+                          <span
+                            className={`feed-dir feed-dir-${it.direction}`}
+                            title={it.direction === "sent" ? "You sent" : "You received"}
+                          >
+                            {it.direction === "sent" ? "→" : "←"}
+                          </span>
+                          <span className="feed-counterparty">
+                            {it.counterpartyName || it.counterpartyEmail}
+                          </span>
+                          <span className="feed-time text-xs text-muted">
+                            {new Date(it.occurredAt).toLocaleDateString()}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
             </>
           ) : (
             <div>
@@ -283,26 +312,6 @@ export function ProfilePage() {
           )}
         </div>
       )}
-
-      <style>{`
-        .spinner {
-          display: inline-block;
-          width: 12px;
-          height: 12px;
-          border: 2px solid rgba(255,255,255,0.3);
-          border-top-color: #fff;
-          border-radius: 50%;
-          animation: spin 0.6s linear infinite;
-        }
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-        @keyframes indeterminate {
-          0% { margin-left: 0; width: 30%; }
-          50% { margin-left: 40%; width: 40%; }
-          100% { margin-left: 70%; width: 30%; }
-        }
-      `}</style>
     </div>
   );
 }

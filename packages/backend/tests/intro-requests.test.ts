@@ -10,8 +10,9 @@ import {
   getIntroRequestById,
   respondToIntroRequest,
   cancelIntroRequest,
-  hasActiveDuplicate,
-  validateIntermediaryOnPath,
+  IntroRequestError,
+  suggestIntroTargets,
+  suggestIntroIntermediaries,
 } from "../src/services/intro-requests.js";
 import { FREE_POLICY, PREMIUM_POLICY } from "../src/graph/traversal.js";
 
@@ -21,7 +22,7 @@ import { FREE_POLICY, PREMIUM_POLICY } from "../src/graph/traversal.js";
  *   Alice(1) --accepted-- Bob(2) --accepted-- Carol(3) --accepted-- Dave(4)
  *
  * Users: Alice(userId=1), Bob(userId=2), Carol(userId=3), Dave(userId=4)
- * Path from Alice to Dave: Alice -> Bob -> Carol -> Dave
+ * Path from Alice to Dave: Alice -> Bob -> Carol -> Dave (3 hops)
  * Intermediaries on that path: Bob, Carol
  */
 
@@ -57,6 +58,25 @@ function setupTestDb(): Database.Database {
   return db;
 }
 
+function mk(overrides: Partial<{
+  requesterUserId: number;
+  requesterPersonId: number;
+  targetPersonId: number;
+  intermediaryPersonId: number;
+  requestNote: string | null;
+  policy: typeof PREMIUM_POLICY;
+}> = {}) {
+  return {
+    requesterUserId: 1,
+    requesterPersonId: 1,
+    targetPersonId: 4,
+    intermediaryPersonId: 2,
+    requestNote: null,
+    policy: PREMIUM_POLICY,
+    ...overrides,
+  };
+}
+
 // ── Create intro request ──
 
 describe("createIntroRequest", () => {
@@ -67,7 +87,7 @@ describe("createIntroRequest", () => {
   });
 
   it("creates a pending intro request", () => {
-    const req = createIntroRequest(db, 1, 1, 4, 2, "Please introduce me!");
+    const req = createIntroRequest(db, mk({ requestNote: "Please introduce me!" }));
     expect(req.id).toBeDefined();
     expect(req.status).toBe("pending");
     expect(req.requesterUserId).toBe(1);
@@ -79,7 +99,7 @@ describe("createIntroRequest", () => {
   });
 
   it("hydrates person summaries", () => {
-    const req = createIntroRequest(db, 1, 1, 4, 2, null);
+    const req = createIntroRequest(db, mk());
     expect(req.requesterPerson).toBeDefined();
     expect(req.requesterPerson!.name).toBe("Alice");
     expect(req.targetPerson).toBeDefined();
@@ -89,99 +109,106 @@ describe("createIntroRequest", () => {
   });
 });
 
-// ── Path validation ──
+// ── Validation ──
 
-describe("validateIntermediaryOnPath", () => {
+describe("intro request validation", () => {
   let db: Database.Database;
 
   beforeEach(() => {
     db = setupTestDb();
   });
 
-  it("accepts Bob as intermediary for Alice → Dave", () => {
-    const result = validateIntermediaryOnPath(db, 1, 4, 2, PREMIUM_POLICY);
-    expect(result.valid).toBe(true);
+  it("rejects requester == target", () => {
+    expect(() =>
+      createIntroRequest(db, mk({ targetPersonId: 1 })),
+    ).toThrowError(/yourself/);
   });
 
-  it("accepts Carol as intermediary for Alice → Dave", () => {
-    const result = validateIntermediaryOnPath(db, 1, 4, 3, PREMIUM_POLICY);
-    expect(result.valid).toBe(true);
+  it("rejects requester == intermediary", () => {
+    expect(() =>
+      createIntroRequest(db, mk({ intermediaryPersonId: 1 })),
+    ).toThrowError(/own intermediary/);
   });
 
-  it("rejects Dave as intermediary (he is the target endpoint)", () => {
-    const result = validateIntermediaryOnPath(db, 1, 4, 4, PREMIUM_POLICY);
-    expect(result.valid).toBe(false);
-    expect(result.reason).toContain("not on a valid path");
+  it("rejects target == intermediary", () => {
+    expect(() =>
+      createIntroRequest(db, mk({ intermediaryPersonId: 4 })),
+    ).toThrowError(/different people/);
   });
 
-  it("rejects an unrelated person as intermediary", () => {
-    // Add an isolated person
-    db.prepare("INSERT INTO persons (id, name, created_by_user_id) VALUES (99, 'Isolated', 1)").run();
-    const result = validateIntermediaryOnPath(db, 1, 4, 99, PREMIUM_POLICY);
-    expect(result.valid).toBe(false);
+  it("rejects unknown target person", () => {
+    expect(() =>
+      createIntroRequest(db, mk({ targetPersonId: 999 })),
+    ).toThrowError(IntroRequestError);
   });
 
-  it("rejects when no path exists", () => {
-    db.prepare("INSERT INTO persons (id, name, created_by_user_id) VALUES (99, 'Isolated', 1)").run();
-    const result = validateIntermediaryOnPath(db, 1, 99, 2, PREMIUM_POLICY);
-    expect(result.valid).toBe(false);
-    expect(result.reason).toContain("No path exists");
+  it("rejects unknown intermediary person", () => {
+    expect(() =>
+      createIntroRequest(db, mk({ intermediaryPersonId: 999 })),
+    ).toThrowError(IntroRequestError);
   });
 
-  it("rejects when path is locked by entitlement policy", () => {
-    // Free policy: maxDegree=2. Path Alice→Dave is 3 hops → locked.
-    const result = validateIntermediaryOnPath(db, 1, 4, 2, FREE_POLICY);
-    expect(result.valid).toBe(false);
-    expect(result.reason).toContain("locked");
+  it("rejects when intermediary is not on a shortest path", () => {
+    // Add an isolated person directly connected only to Alice — not on path to Dave.
+    db.prepare(
+      "INSERT INTO persons (id, name, user_id, created_by_user_id) VALUES (99, 'Isolated', NULL, 1)",
+    ).run();
+    db.prepare(
+      `INSERT INTO connections (source_person_id, target_person_id, relationship_type, closeness_score, status, created_by_user_id)
+       VALUES (1, 99, 'friend', 5, 'accepted', 1)`,
+    ).run();
+
+    expect(() =>
+      createIntroRequest(db, mk({ intermediaryPersonId: 99 })),
+    ).toThrowError(/not on a shortest/);
   });
 
-  it("accepts Bob for Alice → Carol (2-hop, within free tier)", () => {
-    const result = validateIntermediaryOnPath(db, 1, 3, 2, FREE_POLICY);
-    expect(result.valid).toBe(true);
-  });
-});
-
-// ── Duplicate prevention ──
-
-describe("duplicate prevention", () => {
-  let db: Database.Database;
-
-  beforeEach(() => {
-    db = setupTestDb();
+  it("rejects when target is unreachable", () => {
+    db.prepare(
+      "INSERT INTO persons (id, name, created_by_user_id) VALUES (99, 'Isolated', 1)",
+    ).run();
+    expect(() =>
+      createIntroRequest(db, mk({ targetPersonId: 99 })),
+    ).toThrowError(IntroRequestError);
   });
 
-  it("detects active duplicate (pending)", () => {
-    createIntroRequest(db, 1, 1, 4, 2, null);
-    expect(hasActiveDuplicate(db, 1, 4, 2)).toBe(true);
+  it("rejects when path exceeds entitlement (free tier can't reach Dave)", () => {
+    // Alice → Dave is 3 hops. FREE_POLICY maxDegree = 2 → NOT_ENTITLED.
+    expect(() =>
+      createIntroRequest(db, mk({ policy: FREE_POLICY })),
+    ).toThrowError(/exceeds/);
   });
 
-  it("detects active duplicate (accepted)", () => {
-    const req = createIntroRequest(db, 1, 1, 4, 2, null);
-    respondToIntroRequest(db, req.id, "accept", null);
-    expect(hasActiveDuplicate(db, 1, 4, 2)).toBe(true);
+  it("accepts free tier for a 2-hop target", () => {
+    // Alice → Carol is 2 hops, Bob is the intermediary.
+    const req = createIntroRequest(db, mk({ targetPersonId: 3, intermediaryPersonId: 2, policy: FREE_POLICY }));
+    expect(req.status).toBe("pending");
+  });
+
+  it("rejects duplicate active request (pending)", () => {
+    createIntroRequest(db, mk());
+    expect(() => createIntroRequest(db, mk())).toThrowError(/already exists/);
   });
 
   it("allows retry after declined", () => {
-    const req = createIntroRequest(db, 1, 1, 4, 2, null);
-    respondToIntroRequest(db, req.id, "decline", null);
-    expect(hasActiveDuplicate(db, 1, 4, 2)).toBe(false);
-    // Should be able to create a new one
-    const req2 = createIntroRequest(db, 1, 1, 4, 2, "Trying again");
-    expect(req2.id).toBeGreaterThan(req.id);
+    const req = createIntroRequest(db, mk());
+    respondToIntroRequest(db, req.id, 2, "decline", null);
+    const retry = createIntroRequest(db, mk({ requestNote: "Trying again" }));
+    expect(retry.id).toBeGreaterThan(req.id);
   });
 
   it("allows retry after cancelled", () => {
-    const req = createIntroRequest(db, 1, 1, 4, 2, null);
-    cancelIntroRequest(db, req.id);
-    expect(hasActiveDuplicate(db, 1, 4, 2)).toBe(false);
-    const req2 = createIntroRequest(db, 1, 1, 4, 2, null);
-    expect(req2.id).toBeGreaterThan(req.id);
+    const req = createIntroRequest(db, mk());
+    cancelIntroRequest(db, req.id, 1);
+    const retry = createIntroRequest(db, mk());
+    expect(retry.id).toBeGreaterThan(req.id);
   });
 
   it("different intermediary is not a duplicate", () => {
-    createIntroRequest(db, 1, 1, 4, 2, null);
-    // Same requester+target but different intermediary
-    expect(hasActiveDuplicate(db, 1, 4, 3)).toBe(false);
+    createIntroRequest(db, mk({ intermediaryPersonId: 2 }));
+    // Same requester+target but different intermediary (Carol is also on the path)
+    const second = createIntroRequest(db, mk({ intermediaryPersonId: 3 }));
+    expect(second.status).toBe("pending");
   });
 });
 
@@ -195,24 +222,50 @@ describe("state transitions", () => {
   });
 
   it("accept changes status and sets responded_at", () => {
-    const req = createIntroRequest(db, 1, 1, 4, 2, null);
-    const updated = respondToIntroRequest(db, req.id, "accept", "Sure, happy to help!");
-    expect(updated!.status).toBe("accepted");
-    expect(updated!.responseNote).toBe("Sure, happy to help!");
-    expect(updated!.respondedAt).not.toBeNull();
+    const req = createIntroRequest(db, mk());
+    const updated = respondToIntroRequest(db, req.id, 2, "accept", "Sure, happy to help!");
+    expect(updated.status).toBe("accepted");
+    expect(updated.responseNote).toBe("Sure, happy to help!");
+    expect(updated.respondedAt).not.toBeNull();
   });
 
   it("decline changes status", () => {
-    const req = createIntroRequest(db, 1, 1, 4, 2, null);
-    const updated = respondToIntroRequest(db, req.id, "decline", "Sorry, not right now");
-    expect(updated!.status).toBe("declined");
-    expect(updated!.responseNote).toBe("Sorry, not right now");
+    const req = createIntroRequest(db, mk());
+    const updated = respondToIntroRequest(db, req.id, 2, "decline", "Sorry, not right now");
+    expect(updated.status).toBe("declined");
+    expect(updated.responseNote).toBe("Sorry, not right now");
   });
 
   it("cancel changes status to cancelled", () => {
-    const req = createIntroRequest(db, 1, 1, 4, 2, null);
-    const updated = cancelIntroRequest(db, req.id);
-    expect(updated!.status).toBe("cancelled");
+    const req = createIntroRequest(db, mk());
+    const updated = cancelIntroRequest(db, req.id, 1);
+    expect(updated.status).toBe("cancelled");
+  });
+
+  it("cannot respond if not the intermediary", () => {
+    const req = createIntroRequest(db, mk());
+    expect(() =>
+      respondToIntroRequest(db, req.id, 3, "accept", null),
+    ).toThrowError(/intermediary/);
+  });
+
+  it("cannot respond to a non-pending request", () => {
+    const req = createIntroRequest(db, mk());
+    respondToIntroRequest(db, req.id, 2, "accept", null);
+    expect(() =>
+      respondToIntroRequest(db, req.id, 2, "decline", null),
+    ).toThrowError(/not pending/);
+  });
+
+  it("cannot cancel if not the requester", () => {
+    const req = createIntroRequest(db, mk());
+    expect(() => cancelIntroRequest(db, req.id, 2)).toThrowError(/requester/);
+  });
+
+  it("cannot cancel a non-pending request", () => {
+    const req = createIntroRequest(db, mk());
+    respondToIntroRequest(db, req.id, 2, "accept", null);
+    expect(() => cancelIntroRequest(db, req.id, 1)).toThrowError(/not pending/);
   });
 });
 
@@ -226,8 +279,8 @@ describe("sent and inbox", () => {
   });
 
   it("getSentIntroRequests returns requests by requester", () => {
-    createIntroRequest(db, 1, 1, 4, 2, null);
-    createIntroRequest(db, 1, 1, 3, 2, null);
+    createIntroRequest(db, mk({ targetPersonId: 4, intermediaryPersonId: 2 }));
+    createIntroRequest(db, mk({ targetPersonId: 3, intermediaryPersonId: 2 }));
 
     const sent = getSentIntroRequests(db, 1);
     expect(sent.length).toBe(2);
@@ -235,48 +288,26 @@ describe("sent and inbox", () => {
   });
 
   it("getSentIntroRequests does not return other users' requests", () => {
-    createIntroRequest(db, 1, 1, 4, 2, null);
+    createIntroRequest(db, mk());
     const sent = getSentIntroRequests(db, 2);
     expect(sent.length).toBe(0);
   });
 
   it("getInboxIntroRequests returns requests for intermediary", () => {
-    createIntroRequest(db, 1, 1, 4, 2, null);
+    createIntroRequest(db, mk());
     const inbox = getInboxIntroRequests(db, 2);
     expect(inbox.length).toBe(1);
     expect(inbox[0].intermediaryPersonId).toBe(2);
   });
 
   it("getInboxIntroRequests does not return requests for other intermediaries", () => {
-    createIntroRequest(db, 1, 1, 4, 2, null);
+    createIntroRequest(db, mk());
     const inbox = getInboxIntroRequests(db, 3);
     expect(inbox.length).toBe(0);
   });
-});
-
-// ── Authorization enforcement ──
-
-describe("authorization", () => {
-  let db: Database.Database;
-
-  beforeEach(() => {
-    db = setupTestDb();
-  });
-
-  it("only intermediary can see request in their inbox", () => {
-    createIntroRequest(db, 1, 1, 4, 2, null);
-
-    // Bob (person 2) is intermediary — should see it
-    const bobInbox = getInboxIntroRequests(db, 2);
-    expect(bobInbox.length).toBe(1);
-
-    // Carol (person 3) is not — should not see it
-    const carolInbox = getInboxIntroRequests(db, 3);
-    expect(carolInbox.length).toBe(0);
-  });
 
   it("getIntroRequestById returns the request for valid id", () => {
-    const req = createIntroRequest(db, 1, 1, 4, 2, null);
+    const req = createIntroRequest(db, mk());
     const found = getIntroRequestById(db, req.id);
     expect(found).not.toBeNull();
     expect(found!.id).toBe(req.id);
@@ -288,24 +319,91 @@ describe("authorization", () => {
   });
 });
 
-// ── Rule violations (DB-level constraints) ──
+// ── Suggestion helpers ──
 
-describe("constraint violations", () => {
+describe("suggestIntroTargets", () => {
   let db: Database.Database;
 
   beforeEach(() => {
     db = setupTestDb();
   });
 
-  it("rejects requester == target at DB level", () => {
-    expect(() => {
-      createIntroRequest(db, 1, 1, 1, 2, null);
-    }).toThrow();
+  it("returns reachable people with correct hop counts (premium)", () => {
+    const { candidates } = suggestIntroTargets(db, 1, PREMIUM_POLICY);
+    const byId = new Map(candidates.map((c) => [c.personId, c]));
+    expect(byId.get(2)?.minHops).toBe(1); // Bob
+    expect(byId.get(3)?.minHops).toBe(2); // Carol
+    expect(byId.get(4)?.minHops).toBe(3); // Dave
+    expect(candidates.every((c) => !c.locked)).toBe(true);
   });
 
-  it("rejects intermediary == requester at DB level", () => {
-    expect(() => {
-      createIntroRequest(db, 1, 1, 4, 1, null);
-    }).toThrow();
+  it("locks candidates beyond maxDegree (free tier)", () => {
+    const { candidates } = suggestIntroTargets(db, 1, FREE_POLICY);
+    const byId = new Map(candidates.map((c) => [c.personId, c]));
+    // Dave at degree 3 — locked under free (maxDegree=2).
+    expect(byId.get(4)?.locked).toBe(true);
+    expect(byId.get(4)?.name).toBe("Locked");
+    expect(byId.get(2)?.locked).toBe(false);
+    expect(byId.get(3)?.locked).toBe(false);
+  });
+
+  it("does not include self", () => {
+    const { candidates } = suggestIntroTargets(db, 1, PREMIUM_POLICY);
+    expect(candidates.some((c) => c.personId === 1)).toBe(false);
+  });
+});
+
+describe("suggestIntroIntermediaries", () => {
+  let db: Database.Database;
+
+  beforeEach(() => {
+    db = setupTestDb();
+  });
+
+  it("suggests 1st-degree neighbors who can reach the target (premium)", () => {
+    const { candidates, targetDegree } = suggestIntroIntermediaries(db, 1, 4, [], PREMIUM_POLICY);
+    expect(targetDegree).toBe(3);
+    const ids = candidates.map((c) => c.personId);
+    expect(ids).toContain(2); // Bob — 1st-degree to Alice, can reach Dave
+    expect(ids).not.toContain(4); // target is excluded
+    expect(ids).not.toContain(1); // self is excluded
+  });
+
+  it("returns remaining hops for each candidate", () => {
+    const { candidates } = suggestIntroIntermediaries(db, 1, 4, [], PREMIUM_POLICY);
+    const bob = candidates.find((c) => c.personId === 2);
+    expect(bob?.minHops).toBe(2); // Bob → Carol → Dave
+  });
+
+  it("advances the chain — next hop from Bob", () => {
+    const { candidates } = suggestIntroIntermediaries(db, 1, 4, [2], PREMIUM_POLICY);
+    const ids = candidates.map((c) => c.personId);
+    expect(ids).toContain(3); // Carol is next
+    expect(ids).not.toContain(2); // Bob is already in chain
+    const carol = candidates.find((c) => c.personId === 3);
+    expect(carol?.minHops).toBe(1); // Carol → Dave
+  });
+
+  it("free tier hides intermediaries that would exceed maxDegree", () => {
+    // Alice → Dave is 3 hops. Free maxDegree=2. So no intermediary can keep
+    // the total within 2 — empty list.
+    const { candidates } = suggestIntroIntermediaries(db, 1, 4, [], FREE_POLICY);
+    expect(candidates.length).toBe(0);
+  });
+
+  it("free tier shows intermediaries for a 2-hop target", () => {
+    // Alice → Carol is 2 hops via Bob. Free maxDegree=2 allows this.
+    const { candidates } = suggestIntroIntermediaries(db, 1, 3, [], FREE_POLICY);
+    const ids = candidates.map((c) => c.personId);
+    expect(ids).toContain(2);
+  });
+
+  it("returns targetDegree = -1 when target is unreachable", () => {
+    db.prepare(
+      "INSERT INTO persons (id, name, created_by_user_id) VALUES (99, 'Isolated', 1)",
+    ).run();
+    const { targetDegree, candidates } = suggestIntroIntermediaries(db, 1, 99, [], PREMIUM_POLICY);
+    expect(targetDegree).toBe(-1);
+    expect(candidates.length).toBe(0);
   });
 });

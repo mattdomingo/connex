@@ -18,6 +18,9 @@ import type {
   GmailSyncRun,
   RankedConnection,
   InteractionEvidence,
+  SyncFeedResponse,
+  IntroTargetsResponse,
+  IntroIntermediariesResponse,
 } from "@connex/shared";
 
 const BASE = "/api";
@@ -67,8 +70,11 @@ export const getPerson = (id: number) => request<ApiPerson>(`/persons/${id}`);
 export const createPerson = (data: CreatePersonRequest) =>
   request<ApiPerson>("/persons", { method: "POST", body: JSON.stringify(data) });
 
-export const searchPersons = (q: string) =>
-  request<ApiPerson[]>(`/persons?q=${encodeURIComponent(q)}`);
+export const searchPersons = (q: string, opts?: { usersOnly?: boolean }) => {
+  const params = new URLSearchParams({ q });
+  if (opts?.usersOnly) params.set("usersOnly", "true");
+  return request<ApiPerson[]>(`/persons?${params.toString()}`);
+};
 
 // Connections
 export const createConnection = (data: CreateConnectionRequest) =>
@@ -115,6 +121,14 @@ export const triggerGmailSync = () =>
 export const getGmailSyncStatus = () =>
   request<GmailSyncRun | { status: "never_synced" }>("/gmail/sync/status");
 
+export const getGmailSyncFeed = (afterId?: number, limit?: number) => {
+  const params = new URLSearchParams();
+  if (afterId) params.set("afterId", String(afterId));
+  if (limit) params.set("limit", String(limit));
+  const qs = params.toString();
+  return request<SyncFeedResponse>(`/gmail/sync/feed${qs ? `?${qs}` : ""}`);
+};
+
 export const getTopConnections = (opts?: {
   limit?: number;
   company?: string;
@@ -160,3 +174,12 @@ export const respondToIntroRequest = (id: number, data: RespondIntroRequestPaylo
 
 export const cancelIntroRequest = (id: number) =>
   request<ApiIntroRequest>(`/intro-requests/${id}/cancel`, { method: "POST" });
+
+export const getIntroTargets = () =>
+  request<IntroTargetsResponse>("/intro-requests/targets");
+
+export const getIntroIntermediaries = (targetId: number, chain: number[]) => {
+  const params = new URLSearchParams({ targetId: String(targetId) });
+  if (chain.length) params.set("chain", chain.join(","));
+  return request<IntroIntermediariesResponse>(`/intro-requests/intermediaries?${params.toString()}`);
+};

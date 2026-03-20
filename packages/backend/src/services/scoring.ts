@@ -248,14 +248,17 @@ export function getTopConnections(
   const { limit = 100, domain, q, includeHidden = false } = opts;
 
   let query = `
-    SELECT rs.*, p.name, p.email, p.company
+    SELECT rs.*, p.name, p.email, p.company, p.user_id AS person_user_id,
+      EXISTS(
+        SELECT 1 FROM hidden_contacts hc
+        WHERE hc.user_id = rs.user_id AND hc.person_id = rs.person_id
+      ) AS is_hidden
     FROM relationship_scores rs
     JOIN persons p ON rs.person_id = p.id
     WHERE rs.user_id = ?
   `;
   const params: any[] = [userId];
 
-  // Exclude hidden contacts unless explicitly requested
   if (!includeHidden) {
     query += ` AND rs.person_id NOT IN (SELECT person_id FROM hidden_contacts WHERE user_id = ?)`;
     params.push(userId);
@@ -273,18 +276,11 @@ export function getTopConnections(
     params.push(pattern, pattern, pattern);
   }
 
-  query += ` ORDER BY rs.tie_strength DESC LIMIT ?`;
+  // Hidden rows sort after visible ones; within each bucket, strongest first.
+  query += ` ORDER BY is_hidden ASC, rs.tie_strength DESC LIMIT ?`;
   params.push(limit);
 
   const rows = db.prepare(query).all(...params) as any[];
-
-  // Check hidden status if including hidden
-  const hiddenSet = includeHidden
-    ? new Set(
-        (db.prepare("SELECT person_id FROM hidden_contacts WHERE user_id = ?").all(userId) as any[])
-          .map((r) => r.person_id),
-      )
-    : new Set<number>();
 
   return rows.map((r) => ({
     personId: r.person_id,
@@ -292,12 +288,13 @@ export function getTopConnections(
     email: r.email,
     domain: r.email ? r.email.split("@")[1] || null : null,
     company: r.company,
+    isUser: r.person_user_id !== null,
     tieStrength: r.tie_strength,
     interactionCount: r.interaction_count,
     sentCount: r.sent_count,
     receivedCount: r.received_count,
     lastInteractionAt: r.last_interaction_at,
-    hidden: hiddenSet.has(r.person_id) || undefined,
+    hidden: r.is_hidden === 1,
   }));
 }
 

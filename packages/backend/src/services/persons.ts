@@ -83,15 +83,16 @@ export function updatePerson(
 export function searchPersons(
   db: Database.Database,
   query: string,
+  opts: { usersOnly?: boolean } = {},
 ): ApiPerson[] {
   const like = `%${query}%`;
-  const rows = db
-    .prepare(
-      `SELECT * FROM persons
-       WHERE name LIKE ? OR email LIKE ? OR company LIKE ? OR school LIKE ? OR location LIKE ?
-       ORDER BY name LIMIT 50`
-    )
-    .all(like, like, like, like, like) as any[];
+  let sql = `SELECT * FROM persons
+       WHERE (name LIKE ? OR email LIKE ? OR company LIKE ? OR school LIKE ? OR location LIKE ?)`;
+  if (opts.usersOnly) {
+    sql += ` AND user_id IS NOT NULL`;
+  }
+  sql += ` ORDER BY name LIMIT 50`;
+  const rows = db.prepare(sql).all(like, like, like, like, like) as any[];
   return rows.map(mapPerson);
 }
 

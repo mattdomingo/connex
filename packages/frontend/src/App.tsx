@@ -9,7 +9,6 @@ import { ConnectionsPage } from "./pages/ConnectionsPage.js";
 import { ProfilePage } from "./pages/ProfilePage.js";
 import { InvitesPage } from "./pages/InvitesPage.js";
 import { SearchPage } from "./pages/SearchPage.js";
-import { TopConnectionsPage } from "./pages/TopConnectionsPage.js";
 import { IntroductionsPage } from "./pages/IntroductionsPage.js";
 
 export function App() {
@@ -43,8 +42,9 @@ export function App() {
         <Route path="/search" element={<SearchPage />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/invites" element={<InvitesPage />} />
-        <Route path="/top-connections" element={<TopConnectionsPage />} />
         <Route path="/introductions" element={<IntroductionsPage />} />
+        {/* Legacy route — redirect to merged connections view */}
+        <Route path="/top-connections" element={<Navigate to="/connections" replace />} />
         <Route path="*" element={<Navigate to="/graph" replace />} />
       </Routes>
     </Layout>
