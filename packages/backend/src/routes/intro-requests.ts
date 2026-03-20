@@ -45,7 +45,7 @@ router.get("/targets", requireAuth, (req, res) => {
     res.status(404).json({ error: "Profile not found" });
     return;
   }
-  const policy = getPolicyForUser(req.user!.userId);
+  const policy = getPolicyForUser(db, req.user!.userId);
   res.json(suggestIntroTargets(db, requester.id, policy));
 });
 
@@ -72,7 +72,7 @@ router.get("/intermediaries", requireAuth, (req, res) => {
     return;
   }
 
-  const policy = getPolicyForUser(req.user!.userId);
+  const policy = getPolicyForUser(db, req.user!.userId);
   res.json(suggestIntroIntermediaries(db, requester.id, targetId, chain, policy));
 });
 
@@ -102,7 +102,7 @@ router.post("/", requireAuth, (req, res) => {
       targetPersonId: Number(targetPersonId),
       intermediaryPersonId: Number(intermediaryPersonId),
       requestNote: requestNote || null,
-      policy: getPolicyForUser(userId),
+      policy: getPolicyForUser(db, userId),
     });
     res.status(201).json(intro);
   } catch (err) {

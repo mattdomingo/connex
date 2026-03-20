@@ -81,20 +81,35 @@ export function createGoogleUser(
   return result;
 }
 
+export interface UserRow {
+  id: number;
+  email: string;
+  password_hash: string;
+  is_premium: number;
+  created_at: string;
+}
+
 export function findUserByEmail(
   db: Database.Database,
   email: string,
-): { id: number; email: string; password_hash: string; created_at: string } | undefined {
-  return db
-    .prepare("SELECT * FROM users WHERE email = ?")
-    .get(email) as any;
+): UserRow | undefined {
+  return db.prepare("SELECT * FROM users WHERE email = ?").get(email) as any;
 }
 
 export function findUserById(
   db: Database.Database,
   id: number,
-): { id: number; email: string; password_hash: string; created_at: string } | undefined {
-  return db
-    .prepare("SELECT * FROM users WHERE id = ?")
-    .get(id) as any;
+): UserRow | undefined {
+  return db.prepare("SELECT * FROM users WHERE id = ?").get(id) as any;
+}
+
+export function setPremium(
+  db: Database.Database,
+  userId: number,
+  premium: boolean,
+): void {
+  db.prepare("UPDATE users SET is_premium = ? WHERE id = ?").run(
+    premium ? 1 : 0,
+    userId,
+  );
 }

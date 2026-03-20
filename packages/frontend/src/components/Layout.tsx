@@ -5,7 +5,7 @@ import { useTheme, type ThemeMode } from "../hooks/useTheme.js";
 import { useSyncStatus } from "../hooks/useSyncStatus.js";
 
 export function Layout({ children }: { children: React.ReactNode }) {
-  const { person, signOut } = useAuth();
+  const { user, person, signOut } = useAuth();
   const { mode, setMode } = useTheme();
   const { run, isSyncing } = useSyncStatus();
 
@@ -18,18 +18,26 @@ export function Layout({ children }: { children: React.ReactNode }) {
     { to: "/profile", label: "Profile" },
   ];
 
-  const cycleTheme = () => {
-    const order: ThemeMode[] = ["system", "light", "dark"];
-    setMode(order[(order.indexOf(mode) + 1) % order.length]);
-  };
+  const modes: { value: ThemeMode; label: string }[] = [
+    { value: "light", label: "Light" },
+    { value: "system", label: "System" },
+    { value: "dark", label: "Dark" },
+  ];
 
-  const themeIcon =
-    mode === "light" ? "☀️" : mode === "dark" ? "🌙" : "🖥️";
+  const isPremium = user?.isPremium ?? false;
 
   return (
     <div className="app-layout">
       <nav className="sidebar">
-        <div className="sidebar-brand">Connex</div>
+        <div className="sidebar-brand">
+          Connex
+          <span
+            className={`plan-badge ${isPremium ? "plan-badge--premium" : "plan-badge--free"}`}
+            title={isPremium ? "Premium account" : "Free account"}
+          >
+            {isPremium ? "Premium" : "Free"}
+          </span>
+        </div>
         <div className="sidebar-nav">
           {links.map((link) => (
             <NavLink
@@ -44,15 +52,21 @@ export function Layout({ children }: { children: React.ReactNode }) {
           ))}
         </div>
         <div className="sidebar-footer">
-          <button
-            type="button"
-            className="btn btn-sm w-full mb-2"
-            onClick={cycleTheme}
-            title={`Theme: ${mode} (click to cycle)`}
-          >
-            {themeIcon} {mode.charAt(0).toUpperCase() + mode.slice(1)}
-          </button>
-          <div className="font-medium">{person?.name}</div>
+          <div className="theme-segment" role="radiogroup" aria-label="Theme">
+            {modes.map((m) => (
+              <button
+                key={m.value}
+                type="button"
+                role="radio"
+                aria-checked={mode === m.value}
+                className={`theme-segment-btn${mode === m.value ? " active" : ""}`}
+                onClick={() => setMode(m.value)}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+          <div className="font-medium mt-2">{person?.name}</div>
           <div className="text-xs mt-2" style={{ cursor: "pointer" }} onClick={signOut}>
             Sign out
           </div>

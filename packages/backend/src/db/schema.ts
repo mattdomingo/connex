@@ -26,6 +26,7 @@ export function initializeSchema(db: Database.Database): void {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       email TEXT NOT NULL UNIQUE COLLATE NOCASE,
       password_hash TEXT NOT NULL,
+      is_premium INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
@@ -96,4 +97,10 @@ export function initializeSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_connections_status ON connections(status);
     CREATE INDEX IF NOT EXISTS idx_invites_code ON invites(code);
   `);
+
+  // Additive migration: is_premium may not exist on older DBs.
+  const cols = db.prepare("PRAGMA table_info(users)").all() as { name: string }[];
+  if (!cols.some((c) => c.name === "is_premium")) {
+    db.exec("ALTER TABLE users ADD COLUMN is_premium INTEGER NOT NULL DEFAULT 0");
+  }
 }

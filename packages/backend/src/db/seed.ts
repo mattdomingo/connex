@@ -36,12 +36,14 @@ interface UserSeed {
   company: string;
   school: string;
   location: string;
+  premium?: boolean;
 }
 
 const demoUsers: UserSeed[] = [
   {
     email: "alice@demo.com",
     name: "Alice Chen",
+    premium: true,
     bio: "Product manager passionate about developer tools. Building the future of collaboration.",
     company: "Acme Corp",
     school: "MIT",
@@ -92,14 +94,14 @@ const demoUsers: UserSeed[] = [
 const userIds: number[] = [];
 const personIds: number[] = [];
 
-const insertUser = db.prepare("INSERT INTO users (email, password_hash) VALUES (?, ?)");
+const insertUser = db.prepare("INSERT INTO users (email, password_hash, is_premium) VALUES (?, ?, ?)");
 const insertPerson = db.prepare(
   `INSERT INTO persons (name, email, bio, company, school, location, user_id, created_by_user_id)
    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 );
 
 for (const u of demoUsers) {
-  const userResult = insertUser.run(u.email, passwordHash);
+  const userResult = insertUser.run(u.email, passwordHash, u.premium ? 1 : 0);
   const userId = Number(userResult.lastInsertRowid);
   userIds.push(userId);
 
@@ -227,7 +229,8 @@ console.log("\nSeed complete!");
 console.log(`Database: ${dbPath}`);
 console.log("\nDemo accounts (all passwords: password123):");
 for (const u of demoUsers) {
-  console.log(`  ${u.email} — ${u.name}`);
+  const badge = u.premium ? " [PREMIUM]" : "";
+  console.log(`  ${u.email} — ${u.name}${badge}`);
 }
 console.log(`\nBootstrap invite code: ${bootstrapCode}`);
 console.log("Use this code to register a new account.\n");

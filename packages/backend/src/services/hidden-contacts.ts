@@ -40,3 +40,17 @@ export function isHidden(
     .get(userId, personId);
   return !!row;
 }
+
+/**
+ * Has *anyone* hidden this contact? Used to enforce owner-hide-propagates-to-
+ * viewers semantics (if Matthew hides X, Alice never sees X via Matthew).
+ */
+export function isHiddenByAnyOwner(
+  db: Database.Database,
+  personId: number,
+): boolean {
+  const row = db
+    .prepare("SELECT 1 FROM hidden_contacts WHERE person_id = ? LIMIT 1")
+    .get(personId);
+  return !!row;
+}

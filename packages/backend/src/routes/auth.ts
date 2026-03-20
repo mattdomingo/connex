@@ -67,7 +67,13 @@ router.post("/signup", (req, res) => {
     const user = findUserById(db, userId)!;
     res.status(201).json({
       token,
-      user: { id: user.id, email: user.email, personId, createdAt: user.created_at },
+      user: {
+        id: user.id,
+        email: user.email,
+        personId,
+        isPremium: user.is_premium === 1,
+        createdAt: user.created_at,
+      },
       person,
     });
   } catch (err: any) {
@@ -100,7 +106,13 @@ router.post("/signin", (req, res) => {
   const token = generateToken({ userId: user.id, email: user.email });
   res.json({
     token,
-    user: { id: user.id, email: user.email, personId: person.id, createdAt: user.created_at },
+    user: {
+      id: user.id,
+      email: user.email,
+      personId: person.id,
+      isPremium: user.is_premium === 1,
+      createdAt: user.created_at,
+    },
     person,
   });
 });
@@ -114,7 +126,13 @@ router.get("/me", requireAuth, (req, res) => {
   }
   const person = getPersonByUserId(db, user.id);
   res.json({
-    user: { id: user.id, email: user.email, personId: person?.id, createdAt: user.created_at },
+    user: {
+      id: user.id,
+      email: user.email,
+      personId: person?.id,
+      isPremium: user.is_premium === 1,
+      createdAt: user.created_at,
+    },
     person,
   });
 });

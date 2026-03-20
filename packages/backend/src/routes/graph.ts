@@ -17,7 +17,7 @@ router.get("/explore", requireAuth, (req, res) => {
     return;
   }
 
-  const policy = getPolicyForUser(req.user!.userId);
+  const policy = getPolicyForUser(db, req.user!.userId);
 
   // Allow centering on a different person
   const centerId = req.query.center
@@ -45,7 +45,7 @@ router.get("/path/:fromId/:toId", requireAuth, (req, res) => {
     return;
   }
 
-  const policy = getPolicyForUser(req.user!.userId);
+  const policy = getPolicyForUser(db, req.user!.userId);
   const result = findShortestPath(db, fromId, toId, person.id, policy);
 
   if (!result) {
@@ -71,7 +71,7 @@ router.get("/search", requireAuth, (req, res) => {
     return;
   }
 
-  const policy = getPolicyForUser(req.user!.userId);
+  const policy = getPolicyForUser(db, req.user!.userId);
   const persons = searchPersons(db, query);
 
   const results: SearchResult[] = persons.map((p) => {

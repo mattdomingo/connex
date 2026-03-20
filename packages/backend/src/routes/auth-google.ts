@@ -14,6 +14,7 @@ import {
   findUserById,
   generateToken,
   createGoogleUser,
+  setPremium,
 } from "../services/auth.js";
 import {
   getPersonByUserId,
@@ -108,6 +109,10 @@ router.get("/callback", async (req, res) => {
 
     // Store/update Google account tokens
     storeGoogleAccount(db, userId, tokens, googleUser);
+
+    // Grant premium to Google-authenticated users so the full multi-degree
+    // graph + intro flow is testable end-to-end with real inbox data.
+    setPremium(db, userId, true);
 
     // Generate app JWT
     const user = findUserById(db, userId)!;

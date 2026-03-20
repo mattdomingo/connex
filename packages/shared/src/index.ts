@@ -26,6 +26,7 @@ export interface ApiUser {
   id: number;
   email: string;
   personId: number;
+  isPremium: boolean;
   createdAt: string;
 }
 

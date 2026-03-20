@@ -119,19 +119,109 @@ describe("Gmail sync -> graph population", () => {
     expect(first.nodes.length).toBe(second.nodes.length);
   });
 
-  it("does not include gmail contacts when viewing someone else's graph", () => {
+  it("does not expose gmail contacts of an unconnected user", () => {
     seedInteractions(db);
     recomputeScores(db, 1);
 
-    // Create a second user
+    // Create a second user — NOT connected to user 1
     const pw = hashPassword("test");
     db.prepare("INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)").run(2, "other@test.com", pw);
     db.prepare("INSERT INTO persons (id, name, email, user_id, created_by_user_id) VALUES (?, ?, ?, ?, ?)").run(100, "Other", "other@test.com", 2, 2);
 
-    // View user 1's graph as user 2 — should not include user 1's gmail contacts
-    const graph = getGraphForPerson(db, 1, FREE_POLICY, 2);
-    // Should only have user 1 (Me) since there are no connections in the connections table
-    expect(graph.nodes.length).toBe(1);
+    // User 2 views their OWN graph — should only see themselves
+    const graph = getGraphForPerson(db, 100, FREE_POLICY, 2);
+    const names = graph.nodes.map((n) => n.name);
+    expect(names).toEqual(["Other"]);
+  });
+});
+
+// ── Cross-user Gmail visibility + hide propagation ──
+//
+// Scenario: Alice (user 2) connects to Matthew (user 1). Matthew has synced
+// Gmail contacts. Alice's graph should show Matthew's contacts as 2nd-degree
+// nodes. If Matthew hides a contact, it disappears from Alice's view too.
+
+describe("connected users see each other's gmail contacts", () => {
+  let db: Database.Database;
+  let aliceGmailId: number;
+
+  beforeEach(() => {
+    db = setupTestDb();
+    seedInteractions(db);
+    recomputeScores(db, 1);
+
+    // Alice (user 2) — connected to Matthew (user 1)
+    const pw = hashPassword("test");
+    db.prepare("INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)").run(2, "alice.user@test.com", pw);
+    db.prepare(
+      "INSERT INTO persons (id, name, email, user_id, created_by_user_id) VALUES (?, ?, ?, ?, ?)",
+    ).run(200, "AliceUser", "alice.user@test.com", 2, 2);
+
+    // Accepted connection Alice <-> Matthew
+    db.prepare(
+      `INSERT INTO connections
+         (source_person_id, target_person_id, relationship_type, closeness_score, status, created_by_user_id)
+       VALUES (200, 1, 'friend', 8, 'accepted', 2)`,
+    ).run();
+
+    // Grab the gmail-contact person ID for 'alice@example.com'
+    aliceGmailId = (db
+      .prepare("SELECT id FROM persons WHERE email = 'alice@example.com'")
+      .get() as any).id;
+  });
+
+  it("Alice sees Matthew's gmail contacts as 2nd-degree nodes", () => {
+    const graph = getGraphForPerson(db, 200, FREE_POLICY, 2);
+    const names = graph.nodes.map((n) => n.name);
+
+    expect(names).toContain("AliceUser"); // self
+    expect(names).toContain("Me"); // Matthew, degree 1
+    expect(names).toContain("Alice"); // Matthew's gmail contact, degree 2
+    expect(names).toContain("Carol"); // another gmail contact
+
+    const aliceNode = graph.nodes.find((n) => n.name === "Alice")!;
+    expect(aliceNode.degree).toBe(2);
+  });
+
+  it("gmail edges anchor on the owning user, not the viewer", () => {
+    const graph = getGraphForPerson(db, 200, FREE_POLICY, 2);
+    const gmailEdges = graph.edges.filter((e) => e.edgeSource === "gmail");
+    expect(gmailEdges.length).toBeGreaterThan(0);
+
+    for (const e of gmailEdges) {
+      // Every gmail edge should touch Matthew (person 1), not Alice (200)
+      expect(e.source === 1 || e.target === 1).toBe(true);
+    }
+  });
+
+  it("hidden by owner is hidden for connected viewers too", () => {
+    // Matthew hides the contact
+    hideContact(db, 1, aliceGmailId);
+
+    const graph = getGraphForPerson(db, 200, FREE_POLICY, 2);
+    const names = graph.nodes.map((n) => n.name);
+
+    expect(names).not.toContain("Alice");
+    expect(names).toContain("Carol"); // non-hidden gmail contact still visible
+  });
+
+  it("unhiding restores visibility for connected viewers", () => {
+    hideContact(db, 1, aliceGmailId);
+    unhideContact(db, 1, aliceGmailId);
+
+    const graph = getGraphForPerson(db, 200, FREE_POLICY, 2);
+    const names = graph.nodes.map((n) => n.name);
+    expect(names).toContain("Alice");
+  });
+
+  it("viewer's own hide list does not leak owner's contacts", () => {
+    // Alice (viewer) hides the contact — but it's Matthew's contact, so it
+    // should still appear (hide is owner-scoped, not viewer-scoped).
+    hideContact(db, 2, aliceGmailId);
+
+    const graph = getGraphForPerson(db, 200, FREE_POLICY, 2);
+    const names = graph.nodes.map((n) => n.name);
+    expect(names).toContain("Alice");
   });
 });
 

@@ -2,6 +2,7 @@ import type {
   AuthResponse,
   SignInRequest,
   SignUpRequest,
+  ApiUser,
   ApiPerson,
   ApiConnection,
   ApiConnectionWithPeople,
@@ -57,7 +58,7 @@ export const signIn = (data: SignInRequest) =>
   request<AuthResponse>("/auth/signin", { method: "POST", body: JSON.stringify(data) });
 
 export const getMe = () =>
-  request<{ user: any; person: ApiPerson }>("/auth/me");
+  request<{ user: ApiUser; person: ApiPerson }>("/auth/me");
 
 // Profile
 export const getMyProfile = () => request<ApiPerson>("/persons/me");
