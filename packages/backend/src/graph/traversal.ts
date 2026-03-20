@@ -45,7 +45,7 @@ export const FREE_POLICY: EntitlementPolicy = {
 };
 
 export const PREMIUM_POLICY: EntitlementPolicy = {
-  maxDegree: Infinity,
+  maxDegree: 3,
 };
 
 /**
@@ -64,7 +64,6 @@ export function getGraphForPerson(
   db: Database.Database,
   centerPersonId: number,
   policy: EntitlementPolicy = FREE_POLICY,
-  viewingUserId?: number,
 ): GraphData {
   // Get all connections (we need pending for display too)
   const allEdges = db
@@ -92,13 +91,16 @@ export function getGraphForPerson(
   interface ScoredContact { person_id: number; tie_strength: number }
   let scoredContacts: ScoredContact[] = [];
 
-  if (viewingUserId) {
-    // Check if center person belongs to the viewing user
+  // Show Gmail contacts for the center person regardless of who is viewing.
+  // This enables bidirectional visibility: if Alice and Matthew are connected,
+  // Alice can see Matthew's Gmail contacts when she re-centers on him.
+  {
     const centerPerson = db
       .prepare("SELECT user_id FROM persons WHERE id = ?")
-      .get(centerPersonId) as any;
+      .get(centerPersonId) as { user_id: number | null } | undefined;
 
-    if (centerPerson && centerPerson.user_id === viewingUserId) {
+    if (centerPerson && centerPerson.user_id != null) {
+      const centerUserId = centerPerson.user_id;
       scoredContacts = db
         .prepare(
           `SELECT rs.person_id, rs.tie_strength
@@ -109,7 +111,7 @@ export function getGraphForPerson(
            ORDER BY rs.tie_strength DESC
            LIMIT ?`,
         )
-        .all(viewingUserId, GMAIL_GRAPH_MIN_STRENGTH, viewingUserId, GMAIL_GRAPH_LIMIT) as ScoredContact[];
+        .all(centerUserId, GMAIL_GRAPH_MIN_STRENGTH, centerUserId, GMAIL_GRAPH_LIMIT) as ScoredContact[];
 
       for (const sc of scoredContacts) {
         personIds.add(sc.person_id);

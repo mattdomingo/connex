@@ -19,14 +19,14 @@ router.get("/explore", requireAuth, (req, res) => {
     return;
   }
 
-  const policy = getPolicyForUser(req.user!.userId);
+  const policy = getPolicyForUser(db, req.user!.userId);
 
   // Allow centering on a different person
   const centerId = req.query.center
     ? parseInt(req.query.center as string, 10)
     : person.id;
 
-  const graphData = getGraphForPerson(db, centerId, policy, req.user!.userId);
+  const graphData = getGraphForPerson(db, centerId, policy);
   res.json(graphData);
 });
 
@@ -47,7 +47,7 @@ router.get("/path/:fromId/:toId", requireAuth, (req, res) => {
     return;
   }
 
-  const policy = getPolicyForUser(req.user!.userId);
+  const policy = getPolicyForUser(db, req.user!.userId);
   const result = findShortestPath(db, fromId, toId, person.id, policy);
 
   if (!result) {
@@ -73,7 +73,7 @@ router.get("/search", requireAuth, (req, res) => {
     return;
   }
 
-  const policy = getPolicyForUser(req.user!.userId);
+  const policy = getPolicyForUser(db, req.user!.userId);
   const persons = searchPersons(db, query);
 
   const results: SearchResult[] = persons.map((p) => {
@@ -105,7 +105,7 @@ router.get("/reachable", requireAuth, (req, res) => {
     return;
   }
 
-  const policy = getPolicyForUser(req.user!.userId);
+  const policy = getPolicyForUser(db, req.user!.userId);
   const edges = db
     .prepare(
       "SELECT id, source_person_id, target_person_id, relationship_type, closeness_score, status FROM connections WHERE status = 'accepted'"
@@ -167,7 +167,7 @@ router.get("/intermediaries/:targetId", requireAuth, (req, res) => {
     return;
   }
 
-  const policy = getPolicyForUser(req.user!.userId);
+  const policy = getPolicyForUser(db, req.user!.userId);
   const edges = db
     .prepare(
       "SELECT id, source_person_id, target_person_id, relationship_type, closeness_score, status FROM connections WHERE status = 'accepted'"
@@ -200,9 +200,6 @@ router.get("/intermediaries/:targetId", requireAuth, (req, res) => {
     // Total chain length if this person is the intermediary: 1 (requester→inter) + degFromTarget (inter→target)
     const totalHops = 1 + degFromTarget;
 
-    // Free users: only show if total hops <= maxDegree
-    if (totalHops > policy.maxDegree) continue;
-
     const p = db.prepare("SELECT id, name, email, company, user_id FROM persons WHERE id = ?").get(neighborId) as any;
     if (!p) continue;
 
@@ -226,6 +223,67 @@ router.get("/intermediaries/:targetId", requireAuth, (req, res) => {
     totalDegrees: directPath.length,
     intermediaries,
   });
+});
+
+/**
+ * GET /api/graph/next-hops/:fromId/:targetId
+ * Returns valid next-hop options from a given node toward a target.
+ * Used by the multi-hop intro chain builder: after picking hop N,
+ * this returns the options for hop N+1.
+ */
+router.get("/next-hops/:fromId/:targetId", requireAuth, (req, res) => {
+  const fromId = parseInt(String(req.params.fromId), 10);
+  const targetId = parseInt(String(req.params.targetId), 10);
+
+  if (isNaN(fromId) || isNaN(targetId)) {
+    res.status(400).json({ error: "Invalid person IDs" });
+    return;
+  }
+
+  const db = getDb();
+
+  const edges = db
+    .prepare(
+      "SELECT id, source_person_id, target_person_id, relationship_type, closeness_score, status FROM connections WHERE status = 'accepted'"
+    )
+    .all() as AlgEdge[];
+  const adj = buildAdjacency(edges);
+
+  // BFS from target to get reverse degrees
+  const { degrees: fromTarget } = bfsDegrees(adj, targetId, 20);
+
+  // Get 1st-degree neighbors of fromId
+  const neighbors = adj.get(fromId) || [];
+  const hops: any[] = [];
+
+  for (const { neighborId } of neighbors) {
+    if (neighborId === fromId) continue;
+
+    const degFromTarget = fromTarget.get(neighborId);
+    if (degFromTarget == null) continue; // can't reach target from here
+
+    const p = db.prepare("SELECT id, name, email, company, user_id FROM persons WHERE id = ?").get(neighborId) as any;
+    if (!p) continue;
+
+    hops.push({
+      id: p.id,
+      name: p.name,
+      email: p.email,
+      company: p.company,
+      isUser: p.user_id !== null,
+      hopsToTarget: degFromTarget,
+      isTarget: neighborId === targetId,
+    });
+  }
+
+  // Sort: target first, then by hopsToTarget ascending, then by name
+  hops.sort((a: any, b: any) => {
+    if (a.isTarget && !b.isTarget) return -1;
+    if (!a.isTarget && b.isTarget) return 1;
+    return a.hopsToTarget - b.hopsToTarget || a.name.localeCompare(b.name);
+  });
+
+  res.json({ hops });
 });
 
 export default router;

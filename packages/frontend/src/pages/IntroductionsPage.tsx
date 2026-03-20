@@ -1,11 +1,18 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
-import type { ApiIntroRequest, ApiPerson } from "@connex/shared";
+import type { ApiIntroRequest } from "@connex/shared";
 import { useAuth } from "../hooks/useAuth.js";
 import * as api from "../api/client.js";
-import type { ReachablePerson, IntermediaryOption } from "../api/client.js";
+import type { ReachablePerson, IntermediaryOption, NextHopOption } from "../api/client.js";
 
 type Tab = "create" | "sent" | "inbox";
+
+interface ChainHop {
+  id: number;
+  name: string;
+  email: string | null;
+  company: string | null;
+}
 
 export function IntroductionsPage() {
   const { person } = useAuth();
@@ -21,8 +28,14 @@ export function IntroductionsPage() {
   const [showTargetDropdown, setShowTargetDropdown] = useState(false);
   const [selectedTarget, setSelectedTarget] = useState<ReachablePerson | null>(null);
 
+  // Multi-hop chain state
+  const [chain, setChain] = useState<ChainHop[]>([]); // hops between requester and target
+  const [nextHopOptions, setNextHopOptions] = useState<NextHopOption[]>([]);
+  const [loadingNextHops, setLoadingNextHops] = useState(false);
+  const [chainComplete, setChainComplete] = useState(false);
+
+  // Initial intermediaries (first hop options)
   const [intermediaries, setIntermediaries] = useState<IntermediaryOption[]>([]);
-  const [selectedInter, setSelectedInter] = useState<IntermediaryOption | null>(null);
   const [totalDegrees, setTotalDegrees] = useState<number | null>(null);
   const [loadingIntermediaries, setLoadingIntermediaries] = useState(false);
 
@@ -52,21 +65,84 @@ export function IntroductionsPage() {
     }
   }, [prefillTarget, reachablePeople]);
 
-  // Load intermediaries when target changes
+  // Load first-hop intermediaries when target changes
   useEffect(() => {
     if (!selectedTarget) {
       setIntermediaries([]);
       setTotalDegrees(null);
-      setSelectedInter(null);
+      resetChain();
       return;
     }
     setLoadingIntermediaries(true);
-    setSelectedInter(null);
+    resetChain();
     api.getIntermediaries(selectedTarget.id).then((resp) => {
       setIntermediaries(resp.intermediaries);
       setTotalDegrees(resp.totalDegrees);
     }).catch(() => {}).finally(() => setLoadingIntermediaries(false));
   }, [selectedTarget]);
+
+  const resetChain = () => {
+    setChain([]);
+    setNextHopOptions([]);
+    setChainComplete(false);
+  };
+
+  // When a hop is selected, load next hops
+  const addHop = async (hop: ChainHop) => {
+    if (!selectedTarget) return;
+
+    const newChain = [...chain, hop];
+    setChain(newChain);
+
+    // Check if this hop directly connects to target
+    if (hop.id === selectedTarget.id) {
+      setChainComplete(true);
+      setNextHopOptions([]);
+      return;
+    }
+
+    // Load next hops from this node toward the target
+    setLoadingNextHops(true);
+    try {
+      const resp = await api.getNextHops(hop.id, selectedTarget.id);
+      if (resp.hops.length === 0) {
+        setChainComplete(true);
+      } else {
+        setNextHopOptions(resp.hops);
+        // If the only option is the target, auto-complete
+        if (resp.hops.length === 1 && resp.hops[0].isTarget) {
+          const targetHop = resp.hops[0];
+          setChain([...newChain, { id: targetHop.id, name: targetHop.name, email: targetHop.email, company: targetHop.company }]);
+          setChainComplete(true);
+          setNextHopOptions([]);
+        }
+      }
+    } catch {
+      setChainComplete(true);
+    } finally {
+      setLoadingNextHops(false);
+    }
+  };
+
+  const removeLastHop = () => {
+    if (chain.length === 0) return;
+    const newChain = chain.slice(0, -1);
+    setChain(newChain);
+    setChainComplete(false);
+
+    // Re-load options for the previous position
+    if (newChain.length === 0) {
+      // Back to first hop selection — intermediaries are already loaded
+      setNextHopOptions([]);
+    } else if (selectedTarget) {
+      const lastHop = newChain[newChain.length - 1];
+      setLoadingNextHops(true);
+      api.getNextHops(lastHop.id, selectedTarget.id)
+        .then((resp) => setNextHopOptions(resp.hops))
+        .catch(() => setNextHopOptions([]))
+        .finally(() => setLoadingNextHops(false));
+    }
+  };
 
   const loadSent = useCallback(async () => {
     setLoadingSent(true);
@@ -89,19 +165,20 @@ export function IntroductionsPage() {
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedTarget || !selectedInter) return;
+    if (!selectedTarget || chain.length === 0) return;
     setSubmitting(true);
     setError("");
     setSuccess("");
     try {
+      // The intro request goes to the first hop (intermediary)
       await api.createIntroRequest({
         targetPersonId: selectedTarget.id,
-        intermediaryPersonId: selectedInter.id,
+        intermediaryPersonId: chain[0].id,
         requestNote: requestNote || undefined,
       });
       setSuccess("Intro request sent!");
       setSelectedTarget(null);
-      setSelectedInter(null);
+      resetChain();
       setRequestNote("");
       setTargetFilter("");
     } catch (err: any) {
@@ -170,6 +247,16 @@ export function IntroductionsPage() {
     const q = targetFilter.toLowerCase();
     return p.name.toLowerCase().includes(q) || (p.email?.toLowerCase().includes(q));
   }).slice(0, 50);
+
+  // Determine which hop options to show
+  const isSelectingFirstHop = chain.length === 0 && selectedTarget && !loadingIntermediaries;
+  const isSelectingNextHop = chain.length > 0 && !chainComplete && !loadingNextHops;
+
+  // Filter chain IDs from options to prevent loops
+  const chainIds = new Set([person?.id, ...chain.map((h) => h.id)]);
+
+  const firstHopFiltered = intermediaries.filter((i) => !chainIds.has(i.id));
+  const nextHopFiltered = nextHopOptions.filter((h) => !chainIds.has(h.id) || h.isTarget);
 
   return (
     <div>
@@ -273,81 +360,140 @@ export function IntroductionsPage() {
               )}
             </div>
 
-            {/* Intermediary selection with traversal info */}
-            {selectedTarget && (
+            {/* Chain visualization */}
+            {selectedTarget && chain.length > 0 && (
+              <div className="form-group">
+                <label className="form-label">Introduction chain</label>
+                <div style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  flexWrap: "wrap",
+                  padding: "10px 12px",
+                  background: "var(--bg-tertiary)",
+                  borderRadius: 6,
+                  border: "1px solid var(--border)",
+                }}>
+                  <span style={chainNodeStyle}>{person?.name} (you)</span>
+                  {chain.map((hop, idx) => (
+                    <span key={hop.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <span style={{ color: "var(--text-muted)", fontSize: 14 }}>&rarr;</span>
+                      <span style={{
+                        ...chainNodeStyle,
+                        background: idx === chain.length - 1 && chainComplete ? "var(--success)" : "var(--accent)",
+                        color: "#fff",
+                      }}>
+                        {hop.name}
+                      </span>
+                    </span>
+                  ))}
+                  {!chainComplete && (
+                    <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <span style={{ color: "var(--text-muted)", fontSize: 14 }}>&rarr;</span>
+                      <span style={{ ...chainNodeStyle, background: "var(--bg-secondary)", color: "var(--text-muted)", borderStyle: "dashed" }}>...</span>
+                    </span>
+                  )}
+                  {chainComplete && chain[chain.length - 1]?.id !== selectedTarget.id && (
+                    <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                      <span style={{ color: "var(--text-muted)", fontSize: 14 }}>&rarr;</span>
+                      <span style={{ ...chainNodeStyle, background: "var(--success)", color: "#fff" }}>
+                        {selectedTarget.name}
+                      </span>
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    className="btn text-xs"
+                    style={{ marginLeft: 8, padding: "2px 8px" }}
+                    onClick={removeLastHop}
+                  >
+                    Undo
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* First hop selection (intermediaries) */}
+            {isSelectingFirstHop && chain.length === 0 && (
               <div className="form-group">
                 <label className="form-label">
-                  Through whom?
+                  Select first hop
                   {totalDegrees != null && (
                     <span className="text-muted text-xs" style={{ marginLeft: 8 }}>
                       ({totalDegrees} degree{totalDegrees !== 1 ? "s" : ""} away)
                     </span>
                   )}
                 </label>
-                {selectedInter ? (
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm">
-                      {selectedInter.name}
-                      {selectedInter.email && <span className="text-muted text-xs" style={{ marginLeft: 6 }}>{selectedInter.email}</span>}
-                    </span>
-                    <span className="text-xs" style={{
-                      background: "var(--bg-tertiary)",
-                      padding: "1px 6px",
-                      borderRadius: 4,
-                      color: "var(--text-secondary)",
-                    }}>
-                      {selectedInter.totalHops} hops
-                    </span>
-                    <button type="button" className="btn text-xs" onClick={() => setSelectedInter(null)}>Change</button>
-                  </div>
-                ) : loadingIntermediaries ? (
-                  <div className="text-muted text-sm">Loading intermediaries...</div>
-                ) : intermediaries.length === 0 ? (
+                {firstHopFiltered.length === 0 ? (
                   <div className="text-muted text-sm">
                     No intermediaries available. You need accepted connections that can reach this person.
                   </div>
                 ) : (
-                  <div style={{
-                    border: "1px solid var(--border)",
-                    borderRadius: 6,
-                    maxHeight: 200,
-                    overflowY: "auto",
-                  }}>
-                    {intermediaries.map((inter) => (
+                  <div style={hopListStyle}>
+                    {firstHopFiltered.map((inter) => (
                       <div
                         key={inter.id}
-                        style={{
-                          padding: "8px 12px",
-                          cursor: "pointer",
-                          fontSize: 13,
-                          borderBottom: "1px solid var(--border)",
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                        }}
-                        onClick={() => setSelectedInter(inter)}
+                        style={hopItemStyle}
+                        onClick={() => addHop({ id: inter.id, name: inter.name, email: inter.email, company: inter.company })}
                       >
                         <div>
                           <strong>{inter.name}</strong>
                           {inter.email && <span className="text-muted text-xs" style={{ marginLeft: 6 }}>{inter.email}</span>}
                           {inter.company && <span className="text-secondary text-xs" style={{ marginLeft: 6 }}>at {inter.company}</span>}
                         </div>
-                        <span style={{
-                          background: inter.totalHops <= 2 ? "var(--success)" : "var(--warning)",
-                          color: "#fff",
-                          padding: "1px 6px",
-                          borderRadius: 4,
-                          fontSize: 11,
-                          fontWeight: 500,
-                          whiteSpace: "nowrap",
-                        }}>
-                          {inter.totalHops} hop{inter.totalHops !== 1 ? "s" : ""}
+                        <span style={hopBadgeStyle(inter.totalHops)}>
+                          {inter.totalHops} hop{inter.totalHops !== 1 ? "s" : ""} to target
                         </span>
                       </div>
                     ))}
                   </div>
                 )}
               </div>
+            )}
+
+            {/* Loading intermediaries */}
+            {selectedTarget && loadingIntermediaries && (
+              <div className="text-muted text-sm">Loading intermediaries...</div>
+            )}
+
+            {/* Next hop selection */}
+            {isSelectingNextHop && (
+              <div className="form-group">
+                <label className="form-label">
+                  Select next hop from {chain[chain.length - 1].name}'s connections
+                </label>
+                {nextHopFiltered.length === 0 ? (
+                  <div className="text-muted text-sm">No further hops available.</div>
+                ) : (
+                  <div style={hopListStyle}>
+                    {nextHopFiltered.map((hop) => (
+                      <div
+                        key={hop.id}
+                        style={{
+                          ...hopItemStyle,
+                          background: hop.isTarget ? "rgba(63, 185, 80, 0.1)" : undefined,
+                        }}
+                        onClick={() => addHop({ id: hop.id, name: hop.name, email: hop.email, company: hop.company })}
+                      >
+                        <div>
+                          <strong>{hop.name}</strong>
+                          {hop.isTarget && <span style={{ color: "var(--success)", fontSize: 11, marginLeft: 6, fontWeight: 500 }}>TARGET</span>}
+                          {hop.email && <span className="text-muted text-xs" style={{ marginLeft: 6 }}>{hop.email}</span>}
+                          {hop.company && <span className="text-secondary text-xs" style={{ marginLeft: 6 }}>at {hop.company}</span>}
+                        </div>
+                        <span style={hopBadgeStyle(hop.hopsToTarget)}>
+                          {hop.isTarget ? "direct" : `${hop.hopsToTarget} hop${hop.hopsToTarget !== 1 ? "s" : ""}`}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Loading next hops */}
+            {loadingNextHops && (
+              <div className="text-muted text-sm mb-4">Loading next hop options...</div>
             )}
 
             {/* Note */}
@@ -365,7 +511,7 @@ export function IntroductionsPage() {
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={!selectedTarget || !selectedInter || submitting}
+              disabled={!selectedTarget || chain.length === 0 || submitting}
             >
               {submitting ? "Sending..." : "Send Intro Request"}
             </button>
@@ -533,3 +679,40 @@ const dropdownItemStyle: React.CSSProperties = {
   fontSize: 13,
   borderBottom: "1px solid var(--border)",
 };
+
+const hopListStyle: React.CSSProperties = {
+  border: "1px solid var(--border)",
+  borderRadius: 6,
+  maxHeight: 200,
+  overflowY: "auto",
+};
+
+const hopItemStyle: React.CSSProperties = {
+  padding: "8px 12px",
+  cursor: "pointer",
+  fontSize: 13,
+  borderBottom: "1px solid var(--border)",
+  display: "flex",
+  justifyContent: "space-between",
+  alignItems: "center",
+};
+
+const chainNodeStyle: React.CSSProperties = {
+  display: "inline-block",
+  padding: "3px 10px",
+  borderRadius: 4,
+  fontSize: 12,
+  fontWeight: 500,
+  background: "var(--bg-secondary)",
+  border: "1px solid var(--border)",
+};
+
+const hopBadgeStyle = (hops: number): React.CSSProperties => ({
+  background: hops <= 1 ? "var(--success)" : hops <= 2 ? "var(--warning)" : "var(--text-muted)",
+  color: "#fff",
+  padding: "1px 6px",
+  borderRadius: 4,
+  fontSize: 11,
+  fontWeight: 500,
+  whiteSpace: "nowrap",
+});

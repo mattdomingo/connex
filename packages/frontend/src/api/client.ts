@@ -136,6 +136,23 @@ export const getReachablePeople = () =>
 export const getIntermediaries = (targetId: number) =>
   request<IntermediariesResponse>(`/graph/intermediaries/${targetId}`);
 
+export interface NextHopOption {
+  id: number;
+  name: string;
+  email: string | null;
+  company: string | null;
+  isUser: boolean;
+  hopsToTarget: number;
+  isTarget: boolean;
+}
+
+export interface NextHopsResponse {
+  hops: NextHopOption[];
+}
+
+export const getNextHops = (fromId: number, targetId: number) =>
+  request<NextHopsResponse>(`/graph/next-hops/${fromId}/${targetId}`);
+
 // Google / Gmail
 export const getGoogleStatus = () =>
   request<GoogleAccountStatus>("/integrations/google/status");

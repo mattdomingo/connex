@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import Database from "better-sqlite3";
 import { initializeSchema } from "../src/db/schema.js";
+import { initializeGmailSchema } from "../src/db/gmail-schema.js";
 import { hashPassword } from "../src/services/auth.js";
 import {
   getGraphForPerson,
@@ -25,6 +26,7 @@ function setupTestDb(): Database.Database {
   const db = new Database(":memory:");
   db.pragma("foreign_keys = ON");
   initializeSchema(db);
+  initializeGmailSchema(db);
 
   const pw = hashPassword("test");
 
@@ -103,35 +105,46 @@ describe("Graph exploration with degree gating", () => {
     db = setupTestDb();
   });
 
-  it("returns 1st and 2nd degree nodes with free policy", () => {
+  it("returns only 1st degree nodes unlocked with free policy (maxDegree=1)", () => {
     const graph = getGraphForPerson(db, 1, FREE_POLICY);
 
-    // Free policy: max degree 2
+    // Free policy: max degree 1
     const unlocked = graph.nodes.filter((n) => !n.locked);
     const locked = graph.nodes.filter((n) => n.locked);
 
-    // Degree 0: Alice. Degree 1: Bob. Degree 2: Carol, Frank
+    // Degree 0: Alice. Degree 1: Bob. Degree 2: Carol, Frank (locked boundary)
     expect(unlocked.map((n) => n.name).sort()).toEqual(
-      ["Alice", "Bob", "Carol", "Frank"].sort()
+      ["Alice", "Bob"].sort()
     );
 
-    // Degree 3 nodes should be locked
+    // Degree 2 nodes should be locked
     for (const node of locked) {
       expect(node.locked).toBe(true);
       expect(node.name).toBe("Locked");
-      expect(node.degree).toBe(3);
+      expect(node.degree).toBe(2);
     }
   });
 
-  it("returns all nodes unlocked with premium policy", () => {
+  it("returns up to 3rd degree nodes unlocked with premium policy (maxDegree=3)", () => {
     const graph = getGraphForPerson(db, 1, PREMIUM_POLICY);
-    const locked = graph.nodes.filter((n) => n.locked);
-    expect(locked).toHaveLength(0);
 
-    const names = graph.nodes.map((n) => n.name).sort();
+    const unlocked = graph.nodes.filter((n) => !n.locked);
+    const locked = graph.nodes.filter((n) => n.locked);
+
+    // Degrees 0-3 unlocked: Alice(0), Bob(1), Carol(2), Frank(2), Dave(3), Grace(3)
+    const names = unlocked.map((n) => n.name).sort();
     expect(names).toContain("Alice");
-    expect(names).toContain("Eve");
+    expect(names).toContain("Bob");
+    expect(names).toContain("Carol");
+    expect(names).toContain("Frank");
+    expect(names).toContain("Dave");
     expect(names).toContain("Grace");
+
+    // Eve is at degree 4 — locked
+    for (const node of locked) {
+      expect(node.locked).toBe(true);
+      expect(node.degree).toBe(4);
+    }
   });
 
   it("includes pending edges in data but not in degree computation", () => {

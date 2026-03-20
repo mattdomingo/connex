@@ -23,8 +23,8 @@ const COLOR_RGB: Record<string, [number, number, number]> = {
 function edgeColorWithIntensity(relationshipType: string, tieStrength?: number): string {
   const rgb = COLOR_RGB[relationshipType] || COLOR_RGB.other;
   const strength = tieStrength ?? 0.5;
-  // Map strength [0,1] to alpha [0.15, 0.9] for a clear monotonic gradient
-  const alpha = 0.15 + strength * 0.75;
+  // Narrower alpha range — thickness is the primary strength differentiator
+  const alpha = 0.35 + strength * 0.55;
   return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha.toFixed(2)})`;
 }
 
@@ -142,12 +142,12 @@ export function GraphVisualization({
 
   const linkWidth = useCallback(
     (link: any) => {
-      if (pathEdgeIds?.has(link.id)) return 3;
+      if (pathEdgeIds?.has(link.id)) return 4;
       if (link.tieStrength != null) {
-        // Scale width 0.5-4 based on tie strength
-        return 0.5 + link.tieStrength * 3.5;
+        // Primary strength differentiator: thickness 0.5-6
+        return 0.5 + link.tieStrength * 5.5;
       }
-      return 1;
+      return 1.5;
     },
     [pathEdgeIds]
   );
@@ -273,13 +273,13 @@ export function GraphVisualization({
             <span>{type}</span>
           </div>
         ))}
-        <div style={{ marginTop: 4, fontWeight: 500, marginBottom: 2, color: labelColor }}>Intensity = Strength</div>
+        <div style={{ marginTop: 4, fontWeight: 500, marginBottom: 2, color: labelColor }}>Thickness = Strength</div>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
           <span style={{ fontSize: 10 }}>Weak</span>
-          <div style={{
-            width: 48, height: 4, borderRadius: 2,
-            background: "linear-gradient(to right, rgba(139,148,158,0.15), rgba(139,148,158,0.9))",
-          }} />
+          <svg width={48} height={10}>
+            <line x1={0} y1={9} x2={48} y2={2} stroke="rgba(139,148,158,0.7)" strokeWidth={1} strokeLinecap="round" />
+            <line x1={0} y1={9} x2={48} y2={2} stroke="rgba(139,148,158,0.4)" strokeWidth={5} strokeLinecap="round" />
+          </svg>
           <span style={{ fontSize: 10 }}>Strong</span>
         </div>
       </div>

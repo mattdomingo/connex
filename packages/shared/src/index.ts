@@ -18,7 +18,7 @@ export type ConnectionStatus = (typeof CONNECTION_STATUSES)[number];
 
 export const MAX_CLOSENESS = 10;
 export const MIN_CLOSENESS = 1;
-export const FREE_TIER_MAX_DEGREE = 2;
+export const FREE_TIER_MAX_DEGREE = 1;
 
 // ── API Types ──
 
