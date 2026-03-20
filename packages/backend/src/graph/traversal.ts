@@ -6,6 +6,13 @@ import type {
   ShortestPathResult,
 } from "@connex/shared";
 import { FREE_TIER_MAX_DEGREE } from "@connex/shared";
+import {
+  buildAdjacency,
+  bfsDegrees,
+  shortestPath as algShortestPath,
+  type AlgEdge,
+  type Adjacency,
+} from "./algorithms.js";
 
 /**
  * Core graph traversal engine.
@@ -17,16 +24,9 @@ import { FREE_TIER_MAX_DEGREE } from "@connex/shared";
  *   that are returned as { locked: true } with minimal info.
  * - Entitlement check is injected as a parameter so it's easy to swap in
  *   premium/subscription logic later.
+ * - Pure algorithms (BFS, shortest path, neighborhood) live in algorithms.ts and
+ *   are DB-agnostic — this file handles only DB I/O and result shaping.
  */
-
-interface RawEdge {
-  id: number;
-  source_person_id: number;
-  target_person_id: number;
-  relationship_type: string;
-  closeness_score: number;
-  status: string;
-}
 
 interface RawPerson {
   id: number;
@@ -49,64 +49,6 @@ export const PREMIUM_POLICY: EntitlementPolicy = {
 };
 
 /**
- * Build the adjacency list from accepted connections only.
- */
-function buildAdjacencyList(
-  edges: RawEdge[],
-): Map<number, { neighborId: number; edge: RawEdge }[]> {
-  const adj = new Map<number, { neighborId: number; edge: RawEdge }[]>();
-
-  for (const edge of edges) {
-    if (edge.status !== "accepted") continue;
-
-    if (!adj.has(edge.source_person_id)) adj.set(edge.source_person_id, []);
-    if (!adj.has(edge.target_person_id)) adj.set(edge.target_person_id, []);
-
-    adj.get(edge.source_person_id)!.push({
-      neighborId: edge.target_person_id,
-      edge,
-    });
-    adj.get(edge.target_person_id)!.push({
-      neighborId: edge.source_person_id,
-      edge,
-    });
-  }
-
-  return adj;
-}
-
-/**
- * BFS from centerPersonId, returning degree of each discovered node.
- */
-function bfs(
-  adj: Map<number, { neighborId: number; edge: RawEdge }[]>,
-  startId: number,
-  maxDegree: number,
-): Map<number, number> {
-  const degrees = new Map<number, number>();
-  degrees.set(startId, 0);
-
-  const queue: number[] = [startId];
-  let head = 0;
-
-  while (head < queue.length) {
-    const current = queue[head++];
-    const currentDegree = degrees.get(current)!;
-    if (currentDegree >= maxDegree) continue;
-
-    const neighbors = adj.get(current) || [];
-    for (const { neighborId } of neighbors) {
-      if (!degrees.has(neighborId)) {
-        degrees.set(neighborId, currentDegree + 1);
-        queue.push(neighborId);
-      }
-    }
-  }
-
-  return degrees;
-}
-
-/**
  * Max Gmail contacts to include in graph (prevents crowding).
  */
 const GMAIL_GRAPH_LIMIT = 50;
@@ -127,15 +69,15 @@ export function getGraphForPerson(
   // Get all connections (we need pending for display too)
   const allEdges = db
     .prepare("SELECT id, source_person_id, target_person_id, relationship_type, closeness_score, status FROM connections WHERE status != 'rejected'")
-    .all() as RawEdge[];
+    .all() as AlgEdge[];
 
-  // BFS on accepted edges only to compute degrees
+  // Build adjacency on accepted edges only for traversal
   const acceptedEdges = allEdges.filter((e) => e.status === "accepted");
-  const adj = buildAdjacencyList(acceptedEdges);
+  const adj: Adjacency = buildAdjacency(acceptedEdges);
 
   // BFS to discover up to maxDegree + 1 (so we can show locked nodes at the boundary)
   const discoveryLimit = policy.maxDegree + 1;
-  const degrees = bfs(adj, centerPersonId, discoveryLimit);
+  const { degrees } = bfsDegrees(adj, centerPersonId, discoveryLimit);
 
   // Collect person IDs we need — include pending connection endpoints too
   const personIds = new Set(degrees.keys());
@@ -288,51 +230,17 @@ export function findShortestPath(
     .prepare(
       "SELECT id, source_person_id, target_person_id, relationship_type, closeness_score, status FROM connections WHERE status = 'accepted'"
     )
-    .all() as RawEdge[];
+    .all() as AlgEdge[];
 
-  const adj = buildAdjacencyList(acceptedEdges);
+  const adj = buildAdjacency(acceptedEdges);
 
-  // BFS from fromPersonId to find path to toPersonId
-  const parent = new Map<number, { parentId: number; edge: RawEdge } | null>();
-  parent.set(fromPersonId, null);
+  const path = algShortestPath(adj, fromPersonId, toPersonId);
+  if (path.length < 0) return null;
 
-  const queue: number[] = [fromPersonId];
-  let head = 0;
-  let found = false;
-
-  while (head < queue.length) {
-    const current = queue[head++];
-    if (current === toPersonId) {
-      found = true;
-      break;
-    }
-
-    const neighbors = adj.get(current) || [];
-    for (const { neighborId, edge } of neighbors) {
-      if (!parent.has(neighborId)) {
-        parent.set(neighborId, { parentId: current, edge });
-        queue.push(neighborId);
-      }
-    }
-  }
-
-  if (!found) return null;
-
-  // Reconstruct path
-  const pathIds: number[] = [];
-  const pathEdges: RawEdge[] = [];
-  let current = toPersonId;
-
-  while (current !== fromPersonId) {
-    pathIds.unshift(current);
-    const p = parent.get(current)!;
-    pathEdges.unshift(p.edge);
-    current = p.parentId;
-  }
-  pathIds.unshift(fromPersonId);
+  const pathIds = path.nodes;
 
   // Compute degrees from requesting person's perspective
-  const requestingDegrees = bfs(adj, requestingPersonId, Infinity);
+  const { degrees: requestingDegrees } = bfsDegrees(adj, requestingPersonId, Infinity);
 
   // Check if path goes beyond entitlement
   const maxPathDegree = Math.max(
@@ -366,7 +274,7 @@ export function findShortestPath(
     };
   });
 
-  const graphEdges: GraphEdge[] = pathEdges.map((e) => ({
+  const graphEdges: GraphEdge[] = path.edges.map((e) => ({
     id: e.id,
     source: e.source_person_id,
     target: e.target_person_id,
@@ -396,9 +304,9 @@ export function getDegreeBetween(
     .prepare(
       "SELECT id, source_person_id, target_person_id, relationship_type, closeness_score, status FROM connections WHERE status = 'accepted'"
     )
-    .all() as RawEdge[];
+    .all() as AlgEdge[];
 
-  const adj = buildAdjacencyList(acceptedEdges);
-  const degrees = bfs(adj, fromPersonId, Infinity);
+  const adj = buildAdjacency(acceptedEdges);
+  const { degrees } = bfsDegrees(adj, fromPersonId, Infinity);
   return degrees.get(toPersonId) ?? null;
 }

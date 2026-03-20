@@ -1,20 +1,36 @@
 import { Router } from "express";
 import { getDb } from "../db/index.js";
 import { requireAuth } from "../middleware/auth.js";
-import { getPersonByUserId, getPersonById } from "../services/persons.js";
+import { getPersonByUserId } from "../services/persons.js";
 import { getPolicyForUser } from "../graph/entitlements.js";
 import {
+  IntroRequestError,
   createIntroRequest,
   getSentIntroRequests,
   getInboxIntroRequests,
   getIntroRequestById,
   respondToIntroRequest,
   cancelIntroRequest,
-  hasActiveDuplicate,
-  validateIntermediaryOnPath,
 } from "../services/intro-requests.js";
 
 const router = Router();
+
+/** Map IntroRequestError codes to HTTP status codes. */
+function handleIntroError(res: any, err: IntroRequestError): void {
+  const status: Record<string, number> = {
+    SELF_TARGET: 400,
+    SELF_INTERMEDIARY: 400,
+    SAME_TARGET_INTERMEDIARY: 400,
+    NOT_FOUND: 404,
+    FORBIDDEN: 403,
+    DUPLICATE: 409,
+    NOT_ON_PATH: 422,
+    UNREACHABLE: 422,
+    NOT_ENTITLED: 403,
+    INVALID_STATE: 409,
+  };
+  res.status(status[err.code] ?? 400).json({ error: err.message, code: err.code });
+}
 
 /**
  * POST /api/intro-requests — Create a new intro request
@@ -24,81 +40,34 @@ router.post("/", requireAuth, (req, res) => {
   const userId = req.user!.userId;
   const db = getDb();
 
+  if (!targetPersonId || !intermediaryPersonId) {
+    res.status(400).json({ error: "targetPersonId and intermediaryPersonId are required" });
+    return;
+  }
+
   const requester = getPersonByUserId(db, userId);
   if (!requester) {
     res.status(404).json({ error: "Profile not found" });
     return;
   }
 
-  // Validate IDs are numbers
-  if (!targetPersonId || !intermediaryPersonId) {
-    res.status(400).json({ error: "targetPersonId and intermediaryPersonId are required" });
-    return;
-  }
-
-  // Validate target and intermediary exist
-  const target = getPersonById(db, targetPersonId);
-  if (!target) {
-    res.status(404).json({ error: "Target person not found" });
-    return;
-  }
-
-  const intermediary = getPersonById(db, intermediaryPersonId);
-  if (!intermediary) {
-    res.status(404).json({ error: "Intermediary person not found" });
-    return;
-  }
-
-  // requester ≠ target
-  if (requester.id === targetPersonId) {
-    res.status(400).json({ error: "Cannot request an intro to yourself" });
-    return;
-  }
-
-  // intermediary ≠ requester
-  if (intermediary.id === requester.id) {
-    res.status(400).json({ error: "Intermediary cannot be yourself" });
-    return;
-  }
-
-  // intermediary ≠ target
-  if (intermediaryPersonId === targetPersonId) {
-    res.status(400).json({ error: "Intermediary cannot be the same as target" });
-    return;
-  }
-
-  // Check for active duplicate
-  if (hasActiveDuplicate(db, userId, targetPersonId, intermediaryPersonId)) {
-    res.status(409).json({
-      error: "An active intro request already exists for this combination",
+  try {
+    const intro = createIntroRequest(db, {
+      requesterUserId: userId,
+      requesterPersonId: requester.id,
+      targetPersonId: Number(targetPersonId),
+      intermediaryPersonId: Number(intermediaryPersonId),
+      requestNote: requestNote || null,
+      policy: getPolicyForUser(userId),
     });
-    return;
+    res.status(201).json(intro);
+  } catch (err) {
+    if (err instanceof IntroRequestError) {
+      handleIntroError(res, err);
+    } else {
+      throw err;
+    }
   }
-
-  // Validate intermediary is on a valid path (using same rules as graph pathfinding)
-  const policy = getPolicyForUser(userId);
-  const validation = validateIntermediaryOnPath(
-    db,
-    requester.id,
-    targetPersonId,
-    intermediaryPersonId,
-    policy,
-  );
-  if (!validation.valid) {
-    res.status(422).json({ error: validation.reason });
-    return;
-  }
-
-  const intro = createIntroRequest(
-    db,
-    userId,
-    requester.id,
-    targetPersonId,
-    intermediaryPersonId,
-    requestNote || null,
-  );
-
-  res.status(201).json(intro);
 });
 
 /**
@@ -120,7 +89,6 @@ router.get("/inbox", requireAuth, (req, res) => {
     res.status(404).json({ error: "Profile not found" });
     return;
   }
-
   const inbox = getInboxIntroRequests(db, person.id);
   res.json(inbox);
 });
@@ -142,27 +110,22 @@ router.post("/:id/respond", requireAuth, (req, res) => {
   }
 
   const db = getDb();
-  const intro = getIntroRequestById(db, id);
-  if (!intro) {
-    res.status(404).json({ error: "Intro request not found" });
-    return;
-  }
-
-  // Only the intermediary can respond
   const person = getPersonByUserId(db, req.user!.userId);
-  if (!person || person.id !== intro.intermediaryPersonId) {
-    res.status(403).json({ error: "Only the intermediary can respond to this request" });
+  if (!person) {
+    res.status(404).json({ error: "Profile not found" });
     return;
   }
 
-  // Only pending requests can be responded to
-  if (intro.status !== "pending") {
-    res.status(409).json({ error: `Cannot respond to a ${intro.status} request` });
-    return;
+  try {
+    const updated = respondToIntroRequest(db, id, person.id, action, responseNote || null);
+    res.json(updated);
+  } catch (err) {
+    if (err instanceof IntroRequestError) {
+      handleIntroError(res, err);
+    } else {
+      throw err;
+    }
   }
-
-  const updated = respondToIntroRequest(db, id, action, responseNote || null);
-  res.json(updated);
 });
 
 /**
@@ -176,26 +139,17 @@ router.post("/:id/cancel", requireAuth, (req, res) => {
   }
 
   const db = getDb();
-  const intro = getIntroRequestById(db, id);
-  if (!intro) {
-    res.status(404).json({ error: "Intro request not found" });
-    return;
-  }
 
-  // Only the requester can cancel
-  if (intro.requesterUserId !== req.user!.userId) {
-    res.status(403).json({ error: "Only the requester can cancel this request" });
-    return;
+  try {
+    const updated = cancelIntroRequest(db, id, req.user!.userId);
+    res.json(updated);
+  } catch (err) {
+    if (err instanceof IntroRequestError) {
+      handleIntroError(res, err);
+    } else {
+      throw err;
+    }
   }
-
-  // Only pending requests can be cancelled
-  if (intro.status !== "pending") {
-    res.status(409).json({ error: `Cannot cancel a ${intro.status} request` });
-    return;
-  }
-
-  const updated = cancelIntroRequest(db, id);
-  res.json(updated);
 });
 
 export default router;
