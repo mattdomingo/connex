@@ -192,6 +192,15 @@ export interface GmailSyncRun {
   errorMessage: string | null;
 }
 
+export interface GmailSyncFeedItem {
+  seq: number;
+  counterpartyEmail: string;
+  counterpartyName: string | null;
+  direction: "sent" | "received";
+  occurredAt: string;
+  timestamp: string;
+}
+
 export interface RankedConnection {
   personId: number;
   name: string;

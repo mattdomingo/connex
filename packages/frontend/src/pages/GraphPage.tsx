@@ -80,7 +80,7 @@ export function GraphPage() {
       {error && <div className="error-msg mb-4">{error}</div>}
 
       <div className="flex gap-4" style={{ height: "calc(100vh - 160px)" }}>
-        <div className="flex-1">
+        <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
           {graphData && (
             <GraphVisualization
               data={graphData}
@@ -92,7 +92,7 @@ export function GraphPage() {
           )}
         </div>
 
-        <div style={{ width: 320, overflowY: "auto" }}>
+        <div style={{ width: 320, flexShrink: 0, overflowY: "auto" }}>
           {pathResult && (
             <PathDisplay path={pathResult} onClose={() => { setPathResult(null); setPathTarget(null); }} />
           )}
@@ -116,15 +116,15 @@ export function GraphPage() {
               <div className="mt-4">
                 <div className="text-xs text-muted mb-2">Graph Legend</div>
                 <div className="legend-item">
-                  <span className="legend-dot" style={{ background: "#58a6ff" }} />
+                  <span className="legend-dot" style={{ background: "var(--accent)" }} />
                   <span className="text-xs">Registered user</span>
                 </div>
                 <div className="legend-item">
-                  <span className="legend-dot" style={{ background: "#8b949e" }} />
+                  <span className="legend-dot" style={{ background: "var(--text-secondary)" }} />
                   <span className="text-xs">Contact (not registered)</span>
                 </div>
                 <div className="legend-item">
-                  <span className="legend-dot" style={{ background: "#6e7681", opacity: 0.4 }} />
+                  <span className="legend-dot" style={{ background: "var(--text-muted)", opacity: 0.4 }} />
                   <span className="text-xs">Locked (3rd degree+)</span>
                 </div>
                 <div className="legend-item mt-2">

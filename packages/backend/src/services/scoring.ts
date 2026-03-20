@@ -247,6 +247,12 @@ export function getTopConnections(
 ): RankedConnection[] {
   const { limit = 100, domain, q, includeHidden = false } = opts;
 
+  // Always fetch hidden status so we can sort hidden items to bottom
+  const hiddenSet = new Set(
+    (db.prepare("SELECT person_id FROM hidden_contacts WHERE user_id = ?").all(userId) as any[])
+      .map((r: any) => r.person_id),
+  );
+
   let query = `
     SELECT rs.*, p.name, p.email, p.company
     FROM relationship_scores rs
@@ -278,15 +284,7 @@ export function getTopConnections(
 
   const rows = db.prepare(query).all(...params) as any[];
 
-  // Check hidden status if including hidden
-  const hiddenSet = includeHidden
-    ? new Set(
-        (db.prepare("SELECT person_id FROM hidden_contacts WHERE user_id = ?").all(userId) as any[])
-          .map((r) => r.person_id),
-      )
-    : new Set<number>();
-
-  return rows.map((r) => ({
+  const results = rows.map((r) => ({
     personId: r.person_id,
     name: r.name,
     email: r.email,
@@ -299,6 +297,15 @@ export function getTopConnections(
     lastInteractionAt: r.last_interaction_at,
     hidden: hiddenSet.has(r.person_id) || undefined,
   }));
+
+  // Sort hidden items to the bottom while preserving strength order within each group
+  results.sort((a, b) => {
+    if (a.hidden && !b.hidden) return 1;
+    if (!a.hidden && b.hidden) return -1;
+    return b.tieStrength - a.tieStrength;
+  });
+
+  return results;
 }
 
 export function getConnectionEvidence(

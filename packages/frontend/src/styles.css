@@ -1,4 +1,5 @@
-:root {
+:root,
+[data-theme="dark"] {
   --bg-primary: #0f1117;
   --bg-secondary: #161b22;
   --bg-tertiary: #21262d;
@@ -12,6 +13,28 @@
   --warning: #d29922;
   --danger: #f85149;
   --purple: #bc8cff;
+  --graph-bg: #0f1117;
+  --graph-label: #e1e4e8;
+  --tooltip-bg: rgba(22, 27, 34, 0.95);
+}
+
+[data-theme="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f6f8fa;
+  --bg-tertiary: #e8eaed;
+  --border: #d0d7de;
+  --text-primary: #1f2328;
+  --text-secondary: #656d76;
+  --text-muted: #8b949e;
+  --accent: #0969da;
+  --accent-hover: #0550ae;
+  --success: #1a7f37;
+  --warning: #9a6700;
+  --danger: #cf222e;
+  --purple: #8250df;
+  --graph-bg: #ffffff;
+  --graph-label: #1f2328;
+  --tooltip-bg: rgba(255, 255, 255, 0.95);
 }
 
 body {
@@ -79,6 +102,31 @@ a:hover {
   flex: 1;
   padding: 24px 32px;
   overflow-y: auto;
+}
+
+/* Sync banner */
+.sync-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 32px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--warning);
+}
+
+.sync-banner-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warning);
+  animation: pulse-dot 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
 }
 
 /* Cards */
@@ -153,7 +201,7 @@ a:hover {
 .btn-primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #0d1117;
+  color: #ffffff;
 }
 .btn-primary:hover {
   background: var(--accent-hover);
@@ -162,7 +210,7 @@ a:hover {
 .btn-success {
   background: var(--success);
   border-color: var(--success);
-  color: #0d1117;
+  color: #ffffff;
 }
 
 .btn-danger {

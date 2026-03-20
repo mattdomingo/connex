@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import type { ApiIntroRequest, ApiPerson } from "@connex/shared";
 import { useAuth } from "../hooks/useAuth.js";
 import * as api from "../api/client.js";
+import type { ReachablePerson, IntermediaryOption } from "../api/client.js";
 
 type Tab = "create" | "sent" | "inbox";
 
@@ -15,12 +16,16 @@ export function IntroductionsPage() {
 
   // Create form state
   const prefillTarget = searchParams.get("targetId");
-  const [targetQuery, setTargetQuery] = useState("");
-  const [targetResults, setTargetResults] = useState<ApiPerson[]>([]);
-  const [selectedTarget, setSelectedTarget] = useState<ApiPerson | null>(null);
-  const [interQuery, setInterQuery] = useState("");
-  const [interResults, setInterResults] = useState<ApiPerson[]>([]);
-  const [selectedInter, setSelectedInter] = useState<ApiPerson | null>(null);
+  const [reachablePeople, setReachablePeople] = useState<ReachablePerson[]>([]);
+  const [targetFilter, setTargetFilter] = useState("");
+  const [showTargetDropdown, setShowTargetDropdown] = useState(false);
+  const [selectedTarget, setSelectedTarget] = useState<ReachablePerson | null>(null);
+
+  const [intermediaries, setIntermediaries] = useState<IntermediaryOption[]>([]);
+  const [selectedInter, setSelectedInter] = useState<IntermediaryOption | null>(null);
+  const [totalDegrees, setTotalDegrees] = useState<number | null>(null);
+  const [loadingIntermediaries, setLoadingIntermediaries] = useState(false);
+
   const [requestNote, setRequestNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -34,32 +39,34 @@ export function IntroductionsPage() {
   const [respondingTo, setRespondingTo] = useState<ApiIntroRequest | null>(null);
   const [responseNote, setResponseNote] = useState("");
 
+  // Load reachable people on mount
+  useEffect(() => {
+    api.getReachablePeople().then(setReachablePeople).catch(() => {});
+  }, []);
+
   // Prefill target from query param
   useEffect(() => {
-    if (prefillTarget) {
-      api.getPerson(Number(prefillTarget)).then((p) => {
-        setSelectedTarget(p);
-      }).catch(() => {});
+    if (prefillTarget && reachablePeople.length > 0) {
+      const found = reachablePeople.find((p) => p.id === Number(prefillTarget));
+      if (found) setSelectedTarget(found);
     }
-  }, [prefillTarget]);
+  }, [prefillTarget, reachablePeople]);
 
-  // Search persons for target
+  // Load intermediaries when target changes
   useEffect(() => {
-    if (targetQuery.length < 1) { setTargetResults([]); return; }
-    const timer = setTimeout(() => {
-      api.searchPersons(targetQuery).then(setTargetResults).catch(() => {});
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [targetQuery]);
-
-  // Search persons for intermediary
-  useEffect(() => {
-    if (interQuery.length < 1) { setInterResults([]); return; }
-    const timer = setTimeout(() => {
-      api.searchPersons(interQuery).then(setInterResults).catch(() => {});
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [interQuery]);
+    if (!selectedTarget) {
+      setIntermediaries([]);
+      setTotalDegrees(null);
+      setSelectedInter(null);
+      return;
+    }
+    setLoadingIntermediaries(true);
+    setSelectedInter(null);
+    api.getIntermediaries(selectedTarget.id).then((resp) => {
+      setIntermediaries(resp.intermediaries);
+      setTotalDegrees(resp.totalDegrees);
+    }).catch(() => {}).finally(() => setLoadingIntermediaries(false));
+  }, [selectedTarget]);
 
   const loadSent = useCallback(async () => {
     setLoadingSent(true);
@@ -96,8 +103,7 @@ export function IntroductionsPage() {
       setSelectedTarget(null);
       setSelectedInter(null);
       setRequestNote("");
-      setTargetQuery("");
-      setInterQuery("");
+      setTargetFilter("");
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -157,6 +163,14 @@ export function IntroductionsPage() {
   const personLabel = (p?: { name: string; email?: string | null }) =>
     p ? `${p.name}${p.email ? ` (${p.email})` : ""}` : "Unknown";
 
+  // Filtered target list
+  const filteredTargets = reachablePeople.filter((p) => {
+    if (p.locked) return false;
+    if (!targetFilter) return true;
+    const q = targetFilter.toLowerCase();
+    return p.name.toLowerCase().includes(q) || (p.email?.toLowerCase().includes(q));
+  }).slice(0, 50);
+
   return (
     <div>
       <div className="page-header">
@@ -194,68 +208,147 @@ export function IntroductionsPage() {
               <label className="form-label">Who do you want to meet?</label>
               {selectedTarget ? (
                 <div className="flex items-center gap-2">
-                  <span className="text-sm">{personLabel(selectedTarget)}</span>
-                  <button type="button" className="btn text-xs" onClick={() => { setSelectedTarget(null); setTargetQuery(""); }}>Change</button>
+                  <span className="text-sm">
+                    {selectedTarget.name}
+                    {selectedTarget.email && <span className="text-muted text-xs" style={{ marginLeft: 6 }}>{selectedTarget.email}</span>}
+                  </span>
+                  <span className="badge badge-friend" style={{ marginLeft: 4 }}>
+                    {selectedTarget.degree} deg
+                  </span>
+                  <button type="button" className="btn text-xs" onClick={() => { setSelectedTarget(null); setTargetFilter(""); }}>Change</button>
                 </div>
               ) : (
                 <div style={{ position: "relative" }}>
                   <input
                     className="form-input"
-                    value={targetQuery}
-                    onChange={(e) => setTargetQuery(e.target.value)}
-                    placeholder="Search by name or email..."
+                    value={targetFilter}
+                    onChange={(e) => setTargetFilter(e.target.value)}
+                    onFocus={() => setShowTargetDropdown(true)}
+                    placeholder="Click to browse or type to filter..."
                   />
-                  {targetResults.length > 0 && (
+                  {showTargetDropdown && (
                     <div style={dropdownStyle}>
-                      {targetResults.filter((p) => p.id !== person?.id).map((p) => (
-                        <div
-                          key={p.id}
-                          style={dropdownItemStyle}
-                          onClick={() => { setSelectedTarget(p); setTargetResults([]); setTargetQuery(""); }}
-                        >
-                          <strong>{p.name}</strong>
-                          {p.email && <span className="text-muted text-xs" style={{ marginLeft: 6 }}>{p.email}</span>}
+                      {filteredTargets.length === 0 ? (
+                        <div style={{ padding: "8px 12px", color: "var(--text-muted)", fontSize: 12 }}>
+                          {reachablePeople.length === 0 ? "No connections yet" : "No matches"}
                         </div>
-                      ))}
+                      ) : (
+                        filteredTargets.map((p) => (
+                          <div
+                            key={p.id}
+                            style={dropdownItemStyle}
+                            onClick={() => {
+                              setSelectedTarget(p);
+                              setShowTargetDropdown(false);
+                              setTargetFilter("");
+                            }}
+                          >
+                            <div className="flex justify-between items-center">
+                              <div>
+                                <strong>{p.name}</strong>
+                                {p.email && <span className="text-muted text-xs" style={{ marginLeft: 6 }}>{p.email}</span>}
+                              </div>
+                              <span className="text-xs" style={{
+                                background: "var(--bg-tertiary)",
+                                padding: "1px 6px",
+                                borderRadius: 4,
+                                color: "var(--text-secondary)",
+                              }}>
+                                {p.degree} deg
+                              </span>
+                            </div>
+                          </div>
+                        ))
+                      )}
                     </div>
+                  )}
+                  {/* Click-away handler */}
+                  {showTargetDropdown && (
+                    <div
+                      style={{ position: "fixed", inset: 0, zIndex: 5 }}
+                      onClick={() => setShowTargetDropdown(false)}
+                    />
                   )}
                 </div>
               )}
             </div>
 
-            {/* Intermediary */}
-            <div className="form-group">
-              <label className="form-label">Through whom? (intermediary)</label>
-              {selectedInter ? (
-                <div className="flex items-center gap-2">
-                  <span className="text-sm">{personLabel(selectedInter)}</span>
-                  <button type="button" className="btn text-xs" onClick={() => { setSelectedInter(null); setInterQuery(""); }}>Change</button>
-                </div>
-              ) : (
-                <div style={{ position: "relative" }}>
-                  <input
-                    className="form-input"
-                    value={interQuery}
-                    onChange={(e) => setInterQuery(e.target.value)}
-                    placeholder="Search for intermediary..."
-                  />
-                  {interResults.length > 0 && (
-                    <div style={dropdownStyle}>
-                      {interResults.filter((p) => p.id !== person?.id && p.id !== selectedTarget?.id).map((p) => (
-                        <div
-                          key={p.id}
-                          style={dropdownItemStyle}
-                          onClick={() => { setSelectedInter(p); setInterResults([]); setInterQuery(""); }}
-                        >
-                          <strong>{p.name}</strong>
-                          {p.email && <span className="text-muted text-xs" style={{ marginLeft: 6 }}>{p.email}</span>}
-                        </div>
-                      ))}
-                    </div>
+            {/* Intermediary selection with traversal info */}
+            {selectedTarget && (
+              <div className="form-group">
+                <label className="form-label">
+                  Through whom?
+                  {totalDegrees != null && (
+                    <span className="text-muted text-xs" style={{ marginLeft: 8 }}>
+                      ({totalDegrees} degree{totalDegrees !== 1 ? "s" : ""} away)
+                    </span>
                   )}
-                </div>
-              )}
-            </div>
+                </label>
+                {selectedInter ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm">
+                      {selectedInter.name}
+                      {selectedInter.email && <span className="text-muted text-xs" style={{ marginLeft: 6 }}>{selectedInter.email}</span>}
+                    </span>
+                    <span className="text-xs" style={{
+                      background: "var(--bg-tertiary)",
+                      padding: "1px 6px",
+                      borderRadius: 4,
+                      color: "var(--text-secondary)",
+                    }}>
+                      {selectedInter.totalHops} hops
+                    </span>
+                    <button type="button" className="btn text-xs" onClick={() => setSelectedInter(null)}>Change</button>
+                  </div>
+                ) : loadingIntermediaries ? (
+                  <div className="text-muted text-sm">Loading intermediaries...</div>
+                ) : intermediaries.length === 0 ? (
+                  <div className="text-muted text-sm">
+                    No intermediaries available. You need accepted connections that can reach this person.
+                  </div>
+                ) : (
+                  <div style={{
+                    border: "1px solid var(--border)",
+                    borderRadius: 6,
+                    maxHeight: 200,
+                    overflowY: "auto",
+                  }}>
+                    {intermediaries.map((inter) => (
+                      <div
+                        key={inter.id}
+                        style={{
+                          padding: "8px 12px",
+                          cursor: "pointer",
+                          fontSize: 13,
+                          borderBottom: "1px solid var(--border)",
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                        }}
+                        onClick={() => setSelectedInter(inter)}
+                      >
+                        <div>
+                          <strong>{inter.name}</strong>
+                          {inter.email && <span className="text-muted text-xs" style={{ marginLeft: 6 }}>{inter.email}</span>}
+                          {inter.company && <span className="text-secondary text-xs" style={{ marginLeft: 6 }}>at {inter.company}</span>}
+                        </div>
+                        <span style={{
+                          background: inter.totalHops <= 2 ? "var(--success)" : "var(--warning)",
+                          color: "#fff",
+                          padding: "1px 6px",
+                          borderRadius: 4,
+                          fontSize: 11,
+                          fontWeight: 500,
+                          whiteSpace: "nowrap",
+                        }}>
+                          {inter.totalHops} hop{inter.totalHops !== 1 ? "s" : ""}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Note */}
             <div className="form-group">
@@ -292,7 +385,7 @@ export function IntroductionsPage() {
           <div className="card" style={{ padding: 0, overflow: "hidden" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
-                <tr style={{ borderBottom: "1px solid #30363d", background: "#161b22" }}>
+                <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--bg-secondary)" }}>
                   <th style={thStyle}>Target</th>
                   <th style={thStyle}>Through</th>
                   <th style={thStyle}>Status</th>
@@ -303,12 +396,12 @@ export function IntroductionsPage() {
               </thead>
               <tbody>
                 {sentRequests.map((r) => (
-                  <tr key={r.id} style={{ borderBottom: "1px solid #21262d" }}>
+                  <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
                     <td style={tdStyle}>{personLabel(r.targetPerson)}</td>
                     <td style={tdStyle}>{personLabel(r.intermediaryPerson)}</td>
                     <td style={tdStyle}>{statusBadge(r.status)}</td>
-                    <td style={tdStyle} className="text-sm text-secondary">{r.requestNote || "—"}</td>
-                    <td style={tdStyle} className="text-sm text-secondary">{r.responseNote || "—"}</td>
+                    <td style={tdStyle} className="text-sm text-secondary">{r.requestNote || "\u2014"}</td>
+                    <td style={tdStyle} className="text-sm text-secondary">{r.responseNote || "\u2014"}</td>
                     <td style={tdStyle}>
                       {r.status === "pending" && (
                         <button className="btn text-xs" style={{ padding: "2px 8px" }} onClick={() => handleCancel(r.id)}>
@@ -336,7 +429,7 @@ export function IntroductionsPage() {
           <div className="card" style={{ padding: 0, overflow: "hidden" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
-                <tr style={{ borderBottom: "1px solid #30363d", background: "#161b22" }}>
+                <tr style={{ borderBottom: "1px solid var(--border)", background: "var(--bg-secondary)" }}>
                   <th style={thStyle}>From</th>
                   <th style={thStyle}>Wants to meet</th>
                   <th style={thStyle}>Status</th>
@@ -346,11 +439,11 @@ export function IntroductionsPage() {
               </thead>
               <tbody>
                 {inboxRequests.map((r) => (
-                  <tr key={r.id} style={{ borderBottom: "1px solid #21262d" }}>
+                  <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
                     <td style={tdStyle}>{personLabel(r.requesterPerson)}</td>
                     <td style={tdStyle}>{personLabel(r.targetPerson)}</td>
                     <td style={tdStyle}>{statusBadge(r.status)}</td>
-                    <td style={tdStyle} className="text-sm text-secondary">{r.requestNote || "—"}</td>
+                    <td style={tdStyle} className="text-sm text-secondary">{r.requestNote || "\u2014"}</td>
                     <td style={tdStyle}>
                       {r.status === "pending" && (
                         <div className="flex gap-2">
@@ -380,7 +473,7 @@ export function IntroductionsPage() {
               <strong>{respondingTo.requesterPerson?.name}</strong> would like you to introduce them to <strong>{respondingTo.targetPerson?.name}</strong>.
             </p>
             {respondingTo.requestNote && (
-              <div style={{ background: "#161b22", padding: "8px 12px", borderRadius: 6, fontSize: 13, marginBottom: 12 }}>
+              <div style={{ background: "var(--bg-secondary)", padding: "8px 12px", borderRadius: 6, fontSize: 13, marginBottom: 12 }}>
                 "{respondingTo.requestNote}"
               </div>
             )}
@@ -396,7 +489,7 @@ export function IntroductionsPage() {
             </div>
             <div className="flex gap-2">
               <button className="btn btn-primary" onClick={() => handleRespond("accept")}>Accept</button>
-              <button className="btn" style={{ color: "#f85149" }} onClick={() => handleRespond("decline")}>Decline</button>
+              <button className="btn" style={{ color: "var(--danger)" }} onClick={() => handleRespond("decline")}>Decline</button>
               <button className="btn" onClick={() => setRespondingTo(null)}>Close</button>
             </div>
           </div>
@@ -411,7 +504,7 @@ const thStyle: React.CSSProperties = {
   textAlign: "left",
   fontSize: 12,
   fontWeight: 500,
-  color: "#8b949e",
+  color: "var(--text-secondary)",
   whiteSpace: "nowrap",
 };
 
@@ -426,10 +519,10 @@ const dropdownStyle: React.CSSProperties = {
   top: "100%",
   left: 0,
   right: 0,
-  background: "#161b22",
-  border: "1px solid #30363d",
+  background: "var(--bg-secondary)",
+  border: "1px solid var(--border)",
   borderRadius: 6,
-  maxHeight: 200,
+  maxHeight: 240,
   overflowY: "auto",
   zIndex: 10,
 };
@@ -438,5 +531,5 @@ const dropdownItemStyle: React.CSSProperties = {
   padding: "8px 12px",
   cursor: "pointer",
   fontSize: 13,
-  borderBottom: "1px solid #21262d",
+  borderBottom: "1px solid var(--border)",
 };
