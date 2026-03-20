@@ -1,0 +1,46 @@
+{
+  "hash": "03c1a439",
+  "configHash": "324f0dd5",
+  "lockfileHash": "94b10b50",
+  "browserHash": "fabf046a",
+  "optimized": {
+    "react/jsx-dev-runtime": {
+      "src": "../../../../node_modules/react/jsx-dev-runtime.js",
+      "file": "react_jsx-dev-runtime.js",
+      "fileHash": "9d2d0e43",
+      "needsInterop": true
+    },
+    "react": {
+      "src": "../../../../node_modules/react/index.js",
+      "file": "react.js",
+      "fileHash": "6f363a4a",
+      "needsInterop": true
+    },
+    "react-dom/client": {
+      "src": "../../../../node_modules/react-dom/client.js",
+      "file": "react-dom_client.js",
+      "fileHash": "ab958c58",
+      "needsInterop": true
+    },
+    "react-router-dom": {
+      "src": "../../../../node_modules/react-router-dom/dist/index.js",
+      "file": "react-router-dom.js",
+      "fileHash": "7643ef98",
+      "needsInterop": false
+    },
+    "react-force-graph-2d": {
+      "src": "../../../../node_modules/react-force-graph-2d/dist/react-force-graph-2d.mjs",
+      "file": "react-force-graph-2d.js",
+      "fileHash": "4440f1a5",
+      "needsInterop": false
+    }
+  },
+  "chunks": {
+    "chunk-52UTOKQR": {
+      "file": "chunk-52UTOKQR.js"
+    },
+    "chunk-IJPF2DNW": {
+      "file": "chunk-IJPF2DNW.js"
+    }
+  }
+}
