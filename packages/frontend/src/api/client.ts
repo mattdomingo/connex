@@ -16,6 +16,7 @@ import type {
   SearchResult,
   GoogleAccountStatus,
   GmailSyncRun,
+  GmailSyncFeedItem,
   RankedConnection,
   InteractionEvidence,
 } from "@connex/shared";
@@ -102,6 +103,58 @@ export const getShortestPath = (fromId: number, toId: number) =>
 export const searchGraph = (q: string) =>
   request<SearchResult[]>(`/graph/search?q=${encodeURIComponent(q)}`);
 
+export interface ReachablePerson {
+  id: number;
+  name: string;
+  email: string | null;
+  company: string | null;
+  degree: number | null;
+  locked: boolean;
+  isUser: boolean;
+}
+
+export interface IntermediaryOption {
+  id: number;
+  name: string;
+  email: string | null;
+  company: string | null;
+  isUser: boolean;
+  degreeFromRequester: number;
+  degreeToTarget: number;
+  totalHops: number;
+}
+
+export interface IntermediariesResponse {
+  reachable: boolean;
+  totalDegrees: number;
+  intermediaries: IntermediaryOption[];
+}
+
+export const getReachablePeople = () =>
+  request<ReachablePerson[]>("/graph/reachable");
+
+export const getIntermediaries = (targetId: number) =>
+  request<IntermediariesResponse>(`/graph/intermediaries/${targetId}`);
+
+export interface NextHopOption {
+  id: number;
+  name: string;
+  email: string | null;
+  company: string | null;
+  isUser: boolean;
+  hopsToTarget: number;
+  isTarget: boolean;
+}
+
+export interface NextHopsResponse {
+  hops: NextHopOption[];
+}
+
+export const getNextHops = (fromId: number, targetId: number, exclude?: number[]) => {
+  const qs = exclude && exclude.length > 0 ? `?exclude=${exclude.join(",")}` : "";
+  return request<NextHopsResponse>(`/graph/next-hops/${fromId}/${targetId}${qs}`);
+};
+
 // Google / Gmail
 export const getGoogleStatus = () =>
   request<GoogleAccountStatus>("/integrations/google/status");
@@ -114,6 +167,9 @@ export const triggerGmailSync = () =>
 
 export const getGmailSyncStatus = () =>
   request<GmailSyncRun | { status: "never_synced" }>("/gmail/sync/status");
+
+export const getGmailSyncFeed = (after?: number) =>
+  request<GmailSyncFeedItem[]>(`/gmail/sync/feed${after != null ? `?after=${after}` : ""}`);
 
 export const getTopConnections = (opts?: {
   limit?: number;

@@ -111,6 +111,10 @@ for (const u of demoUsers) {
 
 console.log(`Created ${demoUsers.length} demo users`);
 
+// ── Make Alice a premium user ──
+db.prepare("UPDATE users SET is_premium = 1 WHERE id = ?").run(userIds[0]);
+console.log("Set Alice as premium user");
+
 // ── Bootstrap invite (created by first user) ──
 db.prepare(
   `INSERT INTO invites (code, created_by_user_id, recipient_name, max_uses, expires_at)

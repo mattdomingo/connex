@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useAuth } from "../hooks/useAuth.js";
 import * as api from "../api/client.js";
-import type { GoogleAccountStatus, GmailSyncRun } from "@connex/shared";
+import type { GoogleAccountStatus, GmailSyncRun, GmailSyncFeedItem } from "@connex/shared";
 
 export function ProfilePage() {
   const { person, refreshProfile } = useAuth();
@@ -20,6 +20,24 @@ export function ProfilePage() {
   const [syncing, setSyncing] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(true);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const feedPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [feedItems, setFeedItems] = useState<GmailSyncFeedItem[]>([]);
+  const feedSeqRef = useRef<number>(0);
+
+  const pollFeed = useCallback(async () => {
+    try {
+      const items = await api.getGmailSyncFeed(feedSeqRef.current);
+      if (items.length > 0) {
+        setFeedItems((prev) => {
+          const merged = [...prev, ...items];
+          return merged.slice(-50); // keep last 50
+        });
+        feedSeqRef.current = items[items.length - 1].seq;
+      }
+    } catch {
+      // ignore feed poll errors
+    }
+  }, []);
 
   const pollSyncStatus = useCallback(async () => {
     try {
@@ -30,6 +48,10 @@ export function ProfilePage() {
         if (pollRef.current) {
           clearInterval(pollRef.current);
           pollRef.current = null;
+        }
+        if (feedPollRef.current) {
+          clearInterval(feedPollRef.current);
+          feedPollRef.current = null;
         }
         setSyncing(false);
       }
@@ -42,6 +64,7 @@ export function ProfilePage() {
     loadGoogleStatus();
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
+      if (feedPollRef.current) clearInterval(feedPollRef.current);
     };
   }, []);
 
@@ -57,6 +80,7 @@ export function ProfilePage() {
       if ("status" in ss && ss.status === "running") {
         setSyncing(true);
         pollRef.current = setInterval(pollSyncStatus, 3000);
+        feedPollRef.current = setInterval(pollFeed, 1500);
       }
     } catch {
       // Google not configured or not connected
@@ -102,12 +126,15 @@ export function ProfilePage() {
   const handleSync = async () => {
     setSyncing(true);
     setError("");
+    setFeedItems([]);
+    feedSeqRef.current = 0;
     try {
       const result = await api.triggerGmailSync();
       setSyncStatus(result);
       // Start polling if sync is running
       if (result.status === "running") {
         pollRef.current = setInterval(pollSyncStatus, 3000);
+        feedPollRef.current = setInterval(pollFeed, 1500);
       }
     } catch (err: any) {
       setError(err.message);
@@ -267,6 +294,44 @@ export function ProfilePage() {
                       animation: "indeterminate 1.5s ease-in-out infinite",
                       width: "30%",
                     }} />
+                  </div>
+                )}
+
+                {/* Live feed of sync activity */}
+                {feedItems.length > 0 && (
+                  <div style={{ marginTop: 12, borderTop: "1px solid #30363d", paddingTop: 8 }}>
+                    <div className="text-xs text-muted mb-2">Live sync feed</div>
+                    <div style={{
+                      maxHeight: 180,
+                      overflowY: "auto",
+                      fontSize: 12,
+                      fontFamily: "monospace",
+                    }}>
+                      {[...feedItems].reverse().slice(0, 30).map((item) => (
+                        <div key={item.seq} style={{
+                          padding: "3px 0",
+                          borderBottom: "1px solid #21262d",
+                          display: "flex",
+                          gap: 8,
+                          alignItems: "center",
+                        }}>
+                          <span style={{
+                            color: item.direction === "sent" ? "#58a6ff" : "#3fb950",
+                            fontWeight: 500,
+                            minWidth: 14,
+                            textAlign: "center",
+                          }}>
+                            {item.direction === "sent" ? "\u2191" : "\u2193"}
+                          </span>
+                          <span style={{ color: "#e1e4e8" }}>
+                            {item.counterpartyName || item.counterpartyEmail}
+                          </span>
+                          <span className="text-muted" style={{ fontSize: 10, marginLeft: "auto" }}>
+                            {new Date(item.occurredAt).toLocaleDateString()}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>

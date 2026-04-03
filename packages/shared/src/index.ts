@@ -18,7 +18,7 @@ export type ConnectionStatus = (typeof CONNECTION_STATUSES)[number];
 
 export const MAX_CLOSENESS = 10;
 export const MIN_CLOSENESS = 1;
-export const FREE_TIER_MAX_DEGREE = 2;
+export const FREE_TIER_MAX_DEGREE = 3;
 
 // ── API Types ──
 
@@ -190,6 +190,15 @@ export interface GmailSyncRun {
   messagesScanned: number;
   messagesProcessed: number;
   errorMessage: string | null;
+}
+
+export interface GmailSyncFeedItem {
+  seq: number;
+  counterpartyEmail: string;
+  counterpartyName: string | null;
+  direction: "sent" | "received";
+  occurredAt: string;
+  timestamp: string;
 }
 
 export interface RankedConnection {

@@ -1,5 +1,33 @@
 import type Database from "better-sqlite3";
-import type { GmailSyncRun } from "@connex/shared";
+import type { GmailSyncRun, GmailSyncFeedItem } from "@connex/shared";
+
+// ── Live Sync Feed ──
+// In-memory circular buffer of recent sync events per user, keyed by userId.
+const FEED_MAX = 50;
+const syncFeeds = new Map<number, GmailSyncFeedItem[]>();
+
+export function pushFeedItem(userId: number, item: GmailSyncFeedItem): void {
+  let feed = syncFeeds.get(userId);
+  if (!feed) {
+    feed = [];
+    syncFeeds.set(userId, feed);
+  }
+  feed.push(item);
+  if (feed.length > FEED_MAX) feed.shift();
+}
+
+export function getSyncFeed(userId: number, after?: number): GmailSyncFeedItem[] {
+  const feed = syncFeeds.get(userId);
+  if (!feed) return [];
+  if (after != null) return feed.filter((i) => i.seq > after);
+  return [...feed];
+}
+
+export function clearSyncFeed(userId: number): void {
+  syncFeeds.delete(userId);
+}
+
+let feedSeq = 0;
 
 // ── Configuration ──
 
@@ -377,6 +405,25 @@ export async function runGmailSync(
           const inserted = upsertInteractions(db, userId, interactions);
           messagesProcessed += inserted;
 
+          // Push live feed items for each counterparty discovered
+          for (const ix of interactions) {
+            pushFeedItem(userId, {
+              seq: ++feedSeq,
+              counterpartyEmail: ix.counterpartyEmail,
+              counterpartyName: ix.counterpartyName,
+              direction: ix.direction,
+              occurredAt: ix.occurredAt,
+              timestamp: new Date().toISOString(),
+            });
+          }
+
+          // Update running scan counts in DB periodically (every 20 messages)
+          if (messagesScanned % 20 === 0) {
+            db.prepare(
+              "UPDATE gmail_sync_runs SET messages_scanned = ?, messages_processed = ? WHERE id = ?",
+            ).run(messagesScanned, messagesProcessed, runId);
+          }
+
           // Track latest date for cursor
           const msgDate = new Date(
             parseInt(msg.internalDate, 10),
@@ -400,6 +447,8 @@ export async function runGmailSync(
            cursor = ?, messages_scanned = ?, messages_processed = ?
        WHERE id = ?`,
     ).run(latestInternalDate, messagesScanned, messagesProcessed, runId);
+
+    // Keep feed available for a bit after sync completes (don't clear immediately)
   } catch (err: any) {
     db.prepare(
       `UPDATE gmail_sync_runs

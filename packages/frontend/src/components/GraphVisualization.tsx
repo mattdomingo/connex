@@ -1,6 +1,7 @@
-import { useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import ForceGraph2D from "react-force-graph-2d";
 import type { GraphData, GraphNode, GraphEdge } from "@connex/shared";
+import { useTheme } from "../hooks/useTheme.js";
 
 const COLORS: Record<string, string> = {
   friend: "#3fb950",
@@ -10,12 +11,31 @@ const COLORS: Record<string, string> = {
   other: "#8b949e",
 };
 
+// RGB values for each relationship type (for alpha-blending)
+const COLOR_RGB: Record<string, [number, number, number]> = {
+  friend: [63, 185, 80],
+  coworker: [88, 166, 255],
+  classmate: [188, 140, 255],
+  family: [210, 153, 34],
+  other: [139, 148, 158],
+};
+
+function edgeColorWithIntensity(relationshipType: string, tieStrength?: number): string {
+  const rgb = COLOR_RGB[relationshipType] || COLOR_RGB.other;
+  const strength = tieStrength ?? 0.5;
+  // Narrower alpha range — thickness is the primary strength differentiator
+  const alpha = 0.35 + strength * 0.55;
+  return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha.toFixed(2)})`;
+}
+
 interface Props {
   data: GraphData;
   onNodeClick: (node: GraphNode) => void;
   selectedNodeId: number | null;
   pathNodeIds: Set<number> | null;
   pathEdgeIds: Set<number> | null;
+  introNodeIds?: Set<number> | null;
+  introEdgePairs?: Set<string> | null;
 }
 
 export function GraphVisualization({
@@ -24,9 +44,35 @@ export function GraphVisualization({
   selectedNodeId,
   pathNodeIds,
   pathEdgeIds,
+  introNodeIds,
+  introEdgePairs,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<any>(null);
+  const [hoveredLink, setHoveredLink] = useState<{ x: number; y: number; link: any } | null>(null);
+  const { resolved: theme } = useTheme();
+  const isDark = theme === "dark";
+  const graphBg = isDark ? "#0f1117" : "#ffffff";
+  const labelColor = isDark ? "#e1e4e8" : "#1f2328";
+  const legendBg = isDark ? "rgba(22, 27, 34, 0.9)" : "rgba(255, 255, 255, 0.9)";
+  const tooltipBg = isDark ? "rgba(22, 27, 34, 0.95)" : "rgba(255, 255, 255, 0.95)";
+  const tooltipBorder = isDark ? "#30363d" : "#d0d7de";
+
+  const handleLinkHover = useCallback((link: any, prevLink: any) => {
+    if (!link) {
+      setHoveredLink(null);
+      return;
+    }
+    // Get screen coords from the midpoint of source/target
+    const src = link.source;
+    const tgt = link.target;
+    if (src?.x != null && tgt?.x != null && fgRef.current) {
+      const midX = (src.x + tgt.x) / 2;
+      const midY = (src.y + tgt.y) / 2;
+      const screen = fgRef.current.graph2ScreenCoords(midX, midY);
+      setHoveredLink({ x: screen.x, y: screen.y, link });
+    }
+  }, []);
 
   // Transform data for force-graph
   const graphInput = useMemo(() => {
@@ -65,6 +111,7 @@ export function GraphVisualization({
     (node: any) => {
       if (node.locked) return "rgba(110, 118, 129, 0.3)";
       if (pathNodeIds?.has(node.id)) return "#f0883e";
+      if (introNodeIds?.has(node.id)) return "#f0883e";
       if (node.id === selectedNodeId) return "#f0883e";
       if (node.isCenter) return "#f0883e";
       if (node.isUser) return "#58a6ff";
@@ -73,7 +120,7 @@ export function GraphVisualization({
       if (node.tieStrength != null) return "#8b949e";
       return "#8b949e";
     },
-    [selectedNodeId, pathNodeIds]
+    [selectedNodeId, pathNodeIds, introNodeIds]
   );
 
   const nodeSize = useCallback(
@@ -81,39 +128,47 @@ export function GraphVisualization({
       if (node.isCenter) return 8;
       if (node.locked) return 3;
       if (pathNodeIds?.has(node.id)) return 7;
+      if (introNodeIds?.has(node.id)) return 7;
       if (node.id === selectedNodeId) return 7;
       // Scale by tie strength: 3-7 range
       if (node.tieStrength != null) return 3 + node.tieStrength * 4;
       return 5;
     },
-    [selectedNodeId, pathNodeIds]
+    [selectedNodeId, pathNodeIds, introNodeIds]
+  );
+
+  const isIntroEdge = useCallback(
+    (link: any) => {
+      if (!introEdgePairs || introEdgePairs.size === 0) return false;
+      const srcId = typeof link.source === "object" ? link.source.id : link.source;
+      const tgtId = typeof link.target === "object" ? link.target.id : link.target;
+      const key = `${Math.min(srcId, tgtId)},${Math.max(srcId, tgtId)}`;
+      return introEdgePairs.has(key);
+    },
+    [introEdgePairs]
   );
 
   const linkColor = useCallback(
     (link: any) => {
       if (pathEdgeIds?.has(link.id)) return "#f0883e";
+      if (isIntroEdge(link)) return "#f0883e";
       if (link.status === "pending") return "rgba(210, 153, 34, 0.4)";
-      if (link.edgeSource === "gmail") {
-        const strength = link.tieStrength ?? 0.3;
-        // Green with opacity based on strength
-        const alpha = 0.2 + strength * 0.6;
-        return `rgba(63, 185, 80, ${alpha})`;
-      }
-      return COLORS[link.relationshipType] || "#30363d";
+      return edgeColorWithIntensity(link.relationshipType, link.tieStrength);
     },
-    [pathEdgeIds]
+    [pathEdgeIds, isIntroEdge]
   );
 
   const linkWidth = useCallback(
     (link: any) => {
-      if (pathEdgeIds?.has(link.id)) return 3;
+      if (pathEdgeIds?.has(link.id)) return 4;
+      if (isIntroEdge(link)) return 4;
       if (link.tieStrength != null) {
-        // Scale width 0.5-4 based on tie strength
-        return 0.5 + link.tieStrength * 3.5;
+        // Primary strength differentiator: thickness 0.5-6
+        return 0.5 + link.tieStrength * 5.5;
       }
-      return 1;
+      return 1.5;
     },
-    [pathEdgeIds]
+    [pathEdgeIds, isIntroEdge]
   );
 
   const linkDashArray = useCallback((link: any) => {
@@ -141,7 +196,7 @@ export function GraphVisualization({
       ctx.fillStyle = color;
       ctx.fill();
 
-      if (node.id === selectedNodeId || pathNodeIds?.has(node.id) || node.isCenter) {
+      if (node.id === selectedNodeId || pathNodeIds?.has(node.id) || introNodeIds?.has(node.id) || node.isCenter) {
         ctx.strokeStyle = "#f0883e";
         ctx.lineWidth = 2 / globalScale;
         ctx.stroke();
@@ -152,11 +207,11 @@ export function GraphVisualization({
         ctx.font = `${node.isCenter ? "bold " : ""}${fontSize}px -apple-system, sans-serif`;
         ctx.textAlign = "center";
         ctx.textBaseline = "top";
-        ctx.fillStyle = node.locked ? "rgba(110,118,129,0.3)" : "#e1e4e8";
+        ctx.fillStyle = node.locked ? "rgba(110,118,129,0.3)" : labelColor;
         ctx.fillText(node.name, node.x, node.y + size + 2);
       }
     },
-    [nodeSize, nodeColor, selectedNodeId, pathNodeIds]
+    [nodeSize, nodeColor, selectedNodeId, pathNodeIds, introNodeIds, labelColor]
   );
 
   return (
@@ -175,44 +230,76 @@ export function GraphVisualization({
         linkColor={linkColor}
         linkWidth={linkWidth}
         linkLineDash={linkDashArray}
+        onLinkHover={handleLinkHover}
         onNodeClick={(node: any) => {
           const graphNode = data.nodes.find((n) => n.id === node.id);
           if (graphNode) onNodeClick(graphNode);
         }}
-        backgroundColor="#0f1117"
+        backgroundColor={graphBg}
         width={containerRef.current?.clientWidth}
         height={containerRef.current?.clientHeight}
         cooldownTicks={100}
         warmupTicks={50}
       />
-      {/* Strength Legend */}
+      {/* Edge hover tooltip */}
+      {hoveredLink && (
+        <div style={{
+          position: "absolute",
+          left: hoveredLink.x + 10,
+          top: hoveredLink.y - 30,
+          background: tooltipBg,
+          border: `1px solid ${tooltipBorder}`,
+          borderRadius: 6,
+          padding: "6px 10px",
+          fontSize: 12,
+          color: labelColor,
+          pointerEvents: "none",
+          zIndex: 20,
+          whiteSpace: "nowrap",
+        }}>
+          <div style={{ fontWeight: 500 }}>
+            <span style={{
+              display: "inline-block",
+              width: 8, height: 8, borderRadius: "50%",
+              background: COLORS[hoveredLink.link.relationshipType] || COLORS.other,
+              marginRight: 6,
+            }} />
+            {hoveredLink.link.relationshipType}
+          </div>
+          <div style={{ color: "#8b949e", marginTop: 2 }}>
+            Strength: {hoveredLink.link.tieStrength != null
+              ? Math.round(hoveredLink.link.tieStrength * 100)
+              : hoveredLink.link.closenessScore * 10}%
+          </div>
+        </div>
+      )}
+      {/* Legend */}
       <div style={{
         position: "absolute",
         bottom: 12,
         left: 12,
-        background: "rgba(22, 27, 34, 0.9)",
-        border: "1px solid #30363d",
+        background: legendBg,
+        border: `1px solid ${tooltipBorder}`,
         borderRadius: 6,
         padding: "8px 12px",
         fontSize: 11,
-        color: "#8b949e",
+        color: "var(--text-secondary)",
       }}>
-        <div style={{ fontWeight: 500, marginBottom: 4, color: "#e1e4e8" }}>Edge Strength</div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
-          <div style={{ width: 24, height: 4, background: "rgba(63, 185, 80, 0.8)", borderRadius: 2 }} />
-          <span>Strong tie</span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
-          <div style={{ width: 24, height: 2, background: "rgba(63, 185, 80, 0.4)", borderRadius: 2 }} />
-          <span>Moderate tie</span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
-          <div style={{ width: 24, height: 1, background: "rgba(63, 185, 80, 0.2)", borderRadius: 2, borderTop: "1px dashed rgba(63,185,80,0.3)" }} />
-          <span>Weak tie</span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <div style={{ width: 24, height: 1, background: "#58a6ff", borderRadius: 2 }} />
-          <span>Manual connection</span>
+        <div style={{ fontWeight: 500, marginBottom: 4, color: labelColor }}>Edge Colors</div>
+        {Object.entries(COLORS).map(([type, color]) => (
+          <div key={type} style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+            <div style={{ width: 24, height: 3, background: color, borderRadius: 2 }} />
+            <span>{type}</span>
+          </div>
+        ))}
+        <div style={{ marginTop: 4, fontWeight: 500, marginBottom: 2, color: labelColor }}>Thickness = Strength</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <span style={{ fontSize: 10 }}>Weak</span>
+          <svg width={48} height={10}>
+            <line x1={0} y1={9} x2={48} y2={2} stroke="rgba(139,148,158,0.7)" strokeWidth={1} strokeLinecap="round" />
+            <line x1={0} y1={9} x2={48} y2={2} stroke="rgba(139,148,158,0.4)" strokeWidth={5} strokeLinecap="round" />
+          </svg>
+          <span style={{ fontSize: 10 }}>Strong</span>
         </div>
       </div>
     </div>

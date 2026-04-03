@@ -58,7 +58,7 @@ describe("Gmail sync -> graph population", () => {
     seedInteractions(db);
     recomputeScores(db, 1);
 
-    const graph = getGraphForPerson(db, 1, FREE_POLICY, 1);
+    const graph = getGraphForPerson(db, 1, FREE_POLICY);
 
     // Should have Me + Alice + Bob + Carol = 4 nodes
     expect(graph.nodes.length).toBeGreaterThanOrEqual(4);
@@ -72,7 +72,7 @@ describe("Gmail sync -> graph population", () => {
     seedInteractions(db);
     recomputeScores(db, 1);
 
-    const graph = getGraphForPerson(db, 1, FREE_POLICY, 1);
+    const graph = getGraphForPerson(db, 1, FREE_POLICY);
 
     const gmailEdges = graph.edges.filter((e) => e.edgeSource === "gmail");
     expect(gmailEdges.length).toBeGreaterThan(0);
@@ -87,7 +87,7 @@ describe("Gmail sync -> graph population", () => {
     seedInteractions(db);
     recomputeScores(db, 1);
 
-    const graph = getGraphForPerson(db, 1, FREE_POLICY, 1);
+    const graph = getGraphForPerson(db, 1, FREE_POLICY);
 
     const gmailEdges = graph.edges.filter((e) => e.edgeSource === "gmail");
     for (const e of gmailEdges) {
@@ -101,7 +101,7 @@ describe("Gmail sync -> graph population", () => {
     seedInteractions(db);
     recomputeScores(db, 1);
 
-    const graph = getGraphForPerson(db, 1, FREE_POLICY, 1);
+    const graph = getGraphForPerson(db, 1, FREE_POLICY);
 
     const alice = graph.nodes.find((n) => n.name === "Alice");
     expect(alice).toBeDefined();
@@ -111,15 +111,15 @@ describe("Gmail sync -> graph population", () => {
   it("repeated recompute doesn't duplicate nodes", () => {
     seedInteractions(db);
     recomputeScores(db, 1);
-    const first = getGraphForPerson(db, 1, FREE_POLICY, 1);
+    const first = getGraphForPerson(db, 1, FREE_POLICY);
 
     recomputeScores(db, 1);
-    const second = getGraphForPerson(db, 1, FREE_POLICY, 1);
+    const second = getGraphForPerson(db, 1, FREE_POLICY);
 
     expect(first.nodes.length).toBe(second.nodes.length);
   });
 
-  it("does not include gmail contacts when viewing someone else's graph", () => {
+  it("shows gmail contacts when viewing the center person's graph (bidirectional)", () => {
     seedInteractions(db);
     recomputeScores(db, 1);
 
@@ -128,10 +128,10 @@ describe("Gmail sync -> graph population", () => {
     db.prepare("INSERT INTO users (id, email, password_hash) VALUES (?, ?, ?)").run(2, "other@test.com", pw);
     db.prepare("INSERT INTO persons (id, name, email, user_id, created_by_user_id) VALUES (?, ?, ?, ?, ?)").run(100, "Other", "other@test.com", 2, 2);
 
-    // View user 1's graph as user 2 — should not include user 1's gmail contacts
-    const graph = getGraphForPerson(db, 1, FREE_POLICY, 2);
-    // Should only have user 1 (Me) since there are no connections in the connections table
-    expect(graph.nodes.length).toBe(1);
+    // View user 1's graph — should include user 1's gmail contacts regardless of viewer
+    const graph = getGraphForPerson(db, 1, FREE_POLICY);
+    // Should have Me + gmail contacts (Alice, Bob, Carol)
+    expect(graph.nodes.length).toBeGreaterThanOrEqual(4);
   });
 });
 
@@ -288,7 +288,7 @@ describe("hidden contacts", () => {
     const alice = (db.prepare("SELECT id FROM persons WHERE email = 'alice@example.com'").get() as any);
     hideContact(db, 1, alice.id);
 
-    const graph = getGraphForPerson(db, 1, FREE_POLICY, 1);
+    const graph = getGraphForPerson(db, 1, FREE_POLICY);
     const names = graph.nodes.map((n) => n.name);
     expect(names).not.toContain("Alice");
   });

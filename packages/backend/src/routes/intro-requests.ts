@@ -58,7 +58,7 @@ router.post("/", requireAuth, (req, res) => {
       targetPersonId: Number(targetPersonId),
       intermediaryPersonId: Number(intermediaryPersonId),
       requestNote: requestNote || null,
-      policy: getPolicyForUser(userId),
+      policy: getPolicyForUser(db, userId),
     });
     res.status(201).json(intro);
   } catch (err) {
